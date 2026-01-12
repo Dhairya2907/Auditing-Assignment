@@ -1,0 +1,35 @@
+{
+  "departments": [
+    "HR",
+    "Purchase",
+    "Sales and Marketing"
+  ],
+  "skills": [
+    "Understanding of competency and training requirements",
+    "Ability to review training records and effectiveness",
+    "Awareness of regulatory requirements related to personnel",
+    "Understanding of supplier selection and evaluation criteria",
+    "Ability to assess incoming inspection linkage with purchasing",
+    "Awareness of supplier agreements and quality clauses",
+    "Understanding of promotional material control",
+    "Ability to verify claims vs intended use",
+    "Awareness of complaint feedback loop from customers"
+  ],
+  "department_skill_map": {
+    "HR": [
+      "Understanding of competency and training requirements",
+      "Ability to review training records and effectiveness",
+      "Awareness of regulatory requirements related to personnel"
+    ],
+    "Purchase": [
+      "Understanding of supplier selection and evaluation criteria",
+      "Ability to assess incoming inspection linkage with purchasing",
+      "Awareness of supplier agreements and quality clauses"
+    ],
+    "Sales and Marketing": [
+      "Understanding of promotional material control",
+      "Ability to verify claims vs intended use",
+      "Awareness of complaint feedback loop from customers"
+    ]
+  }
+}

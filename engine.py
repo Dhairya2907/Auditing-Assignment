@@ -9,7 +9,7 @@ import timetable
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Dict, List, Set, Optional, Tuple
+from typing import Any, Dict, List, Set, Optional, Tuple
 
 # -----------------------------
 # Files
@@ -23,11 +23,12 @@ UPLOADS_DIR = "uploads"
 DEPARTMENTS_FILE = "departments.json"
 SKILLS_CATALOG_FILE = "skills_catalog.json"
 DEPT_REQUIRED_SKILLS_FILE = "dept_required_skills.json"
+CHECKLISTS_CATALOG_FILE = "checklists_catalog.json"
 
 # -----------------------------
 # Default departments (seed)
 # -----------------------------
-DEFAULT_DEPARTMENTS = ["HR", "Purchase", "Sales and Marketing"]
+DEFAULT_DEPARTMENTS = ["HR", "MR", "Purchase", "Sales and Marketing"]
 
 # -----------------------------
 # Default controlled skills (seed)
@@ -69,6 +70,8 @@ DEFAULT_DEPT_REQUIRED_SKILLS = {
         "sm_customer_communication_feedback",
         "sm_complaint_intake_escalation",
     ],
+    # MR intentionally left without required skills (you can add later if you want)
+    "MR": [],
 }
 
 # -----------------------------
@@ -87,6 +90,12 @@ class Person:
 def _now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
+def _normalize_username(name: str) -> str:
+    return name.strip().lower().replace(" ", "")
+
+def _normalize_text(s: str) -> str:
+    return " ".join(str(s or "").strip().split())
+
 def load_json(path: str, default_obj):
     if not os.path.exists(path):
         return default_obj
@@ -100,11 +109,15 @@ def save_json(path: str, obj) -> None:
 def ensure_dirs() -> None:
     os.makedirs(UPLOADS_DIR, exist_ok=True)
 
-def _normalize_username(name: str) -> str:
-    return name.strip().lower().replace(" ", "")
+def _read_json(path: str, default):
+    if not os.path.exists(path):
+        return default
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
-def _normalize_text(s: str) -> str:
-    return " ".join(str(s or "").strip().split())
+def _write_json(path: str, data):
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
 
 # -----------------------------
 # Password hashing (PBKDF2)
@@ -138,7 +151,6 @@ def verify_password(password: str, rec: Dict) -> bool:
 def load_departments_catalog() -> List[str]:
     ensure_seed_files()
     deps = load_json(DEPARTMENTS_FILE, [])
-    # normalize + unique
     out: List[str] = []
     seen = set()
     for d in deps:
@@ -170,7 +182,6 @@ def add_department_to_catalog(dept: str) -> None:
 def load_skills_catalog() -> Dict[str, str]:
     ensure_seed_files()
     cat = load_json(SKILLS_CATALOG_FILE, {})
-    # normalize labels
     out: Dict[str, str] = {}
     for k, v in (cat or {}).items():
         kk = str(k).strip().lower()
@@ -183,33 +194,22 @@ def _save_skills_catalog(cat: Dict[str, str]) -> None:
     save_json(SKILLS_CATALOG_FILE, cat)
 
 def ensure_skill_in_catalog(label: str) -> str:
-    """
-    Ensure a skill label exists in catalog.
-    If exists (case-insensitive label match), return existing key.
-    Otherwise create a new custom key and return it.
-    """
     label = _normalize_text(label)
     if not label:
         raise ValueError("Skill label cannot be empty.")
 
     cat = load_skills_catalog()
 
-    # label match
     for k, v in cat.items():
         if v.strip().lower() == label.lower():
             return k
 
-    # create new key
     new_key = f"custom_{uuid.uuid4().hex[:10]}"
     cat[new_key] = label
     _save_skills_catalog(cat)
     return new_key
 
 def ensure_skill_key_exists(skill_key: str, fallback_label: str = "") -> str:
-    """
-    If a skill_key is seen in people.json or required skills but not in catalog,
-    add it using fallback_label (or key itself) to prevent crashes.
-    """
     kk = str(skill_key).strip().lower()
     if not kk:
         raise ValueError("Skill key cannot be empty.")
@@ -237,7 +237,6 @@ def load_dept_required_skills() -> Dict[str, List[str]]:
             kk = str(k).strip().lower()
             if kk:
                 ks.append(kk)
-        # unique preserve order
         seen = set()
         uniq = []
         for k in ks:
@@ -253,10 +252,8 @@ def set_dept_required_skills(dept: str, skill_keys: List[str]) -> None:
     if not dept:
         raise ValueError("Department cannot be empty.")
 
-    # ensure dept exists in dept catalog
     add_department_to_catalog(dept)
 
-    # normalize keys and ensure they exist in catalog
     cleaned: List[str] = []
     seen = set()
     for k in (skill_keys or []):
@@ -280,6 +277,189 @@ def get_required_skills_for_dept(dept: str) -> Set[str]:
     return set(keys)
 
 # -----------------------------
+# Checklists catalog (Admin-managed)
+# Structure: { dept: { section: [item, item, ...] } }
+# -----------------------------
+def ensure_checklists_catalog() -> None:
+    """
+    Seed checklists_catalog.json ONLY if missing.
+    If file exists, do NOT overwrite admin edits.
+    """
+    if os.path.exists(CHECKLISTS_CATALOG_FILE):
+        return
+
+    seed = {
+        "HR": {
+            "Resource Planning": [
+                "Has top management determined the need for resources and documented it?",
+                "Was the Resource Plan prepared as per the decided time period?",
+                "Were process owners involved in preparing the Resource Plan?",
+                "Is there evidence of consultation with Top Management and MR?",
+                "Is the Resource Plan reviewed during Management Review Meetings (MRM) and documented?",
+            ],
+            "Pre-Boarding & Onboarding": [
+                "Are pre-boarding details completed by the process owner for selected candidates?",
+                "Is the Employee Boarding Checklist used and completed?",
+                "Are education, experience, and training records collected and maintained?",
+                "Is the Employee Master List updated after joining?",
+            ],
+            "Job Roles, Responsibilities & Communication": [
+                "Are job roles, authorities, and responsibilities documented in Job Roles, Tasks, Competency Profile?",
+                "Has top management communicated job roles and responsibilities?",
+                "Is acknowledgement of JD communication recorded?",
+            ],
+            "Competency & Skill Management": [
+                "Are employee skills identified within 7 days of joining?",
+                "Is the Skill Matrix available and updated?",
+                "Is the Skill Matrix reviewed as per the decided time period?",
+                "Are improvements in skills documented and updated?",
+            ],
+            "Exit Management": [
+                "Are exit formalities maintained for employees leaving the organization?",
+                "Is employee list updated post-exit?",
+            ],
+            "Training Planning": [
+                "Has top management planned training for all employees and documented them?",
+                "Is a Training List maintained and used to select training topics?",
+                "Is the Training planning documented as per the time period?",
+                "Are planned trainings communicated to employees?",
+            ],
+            "Conduct of Trainings": [
+                "Are trainings conducted as per the approved Training Plan?",
+                "Are email or documented communications available as evidence?",
+            ],
+            "Evaluation of Trainings": [
+                "Is training effectiveness evaluated upon completion?",
+                "Is evaluation documented appropriately?",
+                "Are appropriate evaluation methods selected?",
+            ],
+        },
+
+        "MR": {
+            "General Requirements": [
+                "Does top management conduct management reviews at planned intervals?",
+                "Is MRM plan documented",
+                "Is the management review procedure defined and implemented?",
+                "Are management review records maintained",
+                "Is MRM notice sent acknowledged by respective personnel and is it documented?",
+                "Is the MRM attendance documented?",
+            ],
+            "Management Review Inputs": [
+                "Results of internal and external audits",
+                "Customer feedback (including complaints)",
+                "Process performance and product conformity",
+                "Status of preventive and corrective actions",
+                "Follow-up actions from previous management reviews",
+                "Changes that could affect the QMS (regulatory, organizational, product-related)",
+                "Recommendations for improvement",
+                "New or revised regulatory requirements applicable to medical devices",
+                "Resource needs (human, infrastructure, work environment)",
+            ],
+            "Conduct of Management Review": [
+                "Is the management review chaired or attended by top management?",
+                "Are relevant process owners involved as required?",
+                "Are discussions aligned with the planned agenda?",
+            ],
+            "Management Review Outputs": [
+                "Improvement of the effectiveness of the QMS",
+                "Improvement of product-related processes",
+                "Improvement of medical device safety and performance",
+                "Resource requirements",
+                "Actions addressing identified risks",
+                "Responsibilities and timelines assigned for actions",
+            ],
+            "Follow-up & Records": [
+                "Is the effectiveness of previous actions reviewed in subsequent MRMs?",
+                "Are management review minutes legible, dated, and approved?",
+            ],
+        },
+
+        "Purchase": {
+            "Supplier Selection": [
+                "Is supplier selection initiated when a new material, component, or service is required?",
+                "Does the Purchase Department identify potential suppliers?",
+                "Are supplier identification sources documented",
+                "Are suppliers evaluated based on defined selection criteria?",
+                "Are suppliers categorized on risk based approach?",
+            ],
+            "Supplier Evaluation & Approval": [
+                "Is Supplier Assessment completed for potential suppliers",
+                "Is the completed assessment reviewed",
+                "Are suppliers evaluated and scored as per defined criteria?",
+                "Are approved suppliers included in Approved Supplier List",
+                "For critical suppliers, is Supplier Quality Agreement executed before approval?",
+            ],
+            "Control of Outsourced Processes": [
+                "Are outsourced processes assigned only to approved suppliers?",
+                "Is verification of certificates and reports from outsourced activities carried out?",
+            ],
+            "Purchase Order Control": [
+                "Is supplier verification against the Approved Supplier List performed before PO issuance?",
+                "Is Supplier Selection & Evaluation initiated if the supplier is not approved",
+                "Are POs reviewed and approved by authorized personnel?",
+                "Are PO records maintained?",
+            ],
+            "Verification of Purchased Product": [
+                "Is Incoming Inspection conducted as per approved procedure or specifications?",
+                "Are inspection results documented?",
+                "Are inspection outcomes (acceptance/rejection/deviation/concession) linked to the supplier?",
+                "Are non-conforming items recorded",
+                "Are inspection results used for supplier performance monitoring",
+            ],
+            "Supplier Performance Evaluation": [
+                "Is supplier performance evaluated based on defined parameters?",
+                "Are suppliers classified according to defined rating scale?",
+                "Are suppliers evaluated as per defined time period?",
+                "Are supplier audits conducted when required?",
+                "Is SCAR issued to the suppliers when required?",
+                "Are supplier ratings reviewed in Management Review Meetings?",
+            ],
+            "Supplier Re-evaluation": [
+                "Is re-evaluation initiated based on performance monitoring results?",
+                "Are re-evaluation outcomes documented?",
+            ],
+        },
+    }
+
+    _write_json(CHECKLISTS_CATALOG_FILE, seed)
+
+def get_checklist_catalog() -> Dict[str, Dict[str, List[str]]]:
+    ensure_checklists_catalog()
+    return _read_json(CHECKLISTS_CATALOG_FILE, {})
+
+def get_sections_for_department(dept: str) -> List[str]:
+    dept = _normalize_text(dept)
+    catalog = get_checklist_catalog()
+    sections = list(catalog.get(dept, {}).keys())
+    sections.sort(key=lambda x: x.lower())
+    return sections
+
+def get_items_for_department_section(dept: str, section: str) -> List[str]:
+    dept = _normalize_text(dept)
+    section = _normalize_text(section)
+    catalog = get_checklist_catalog()
+    return catalog.get(dept, {}).get(section, [])
+
+def upsert_section_items(dept: str, section: str, items: List[str]) -> None:
+    dept = _normalize_text(dept)
+    section = _normalize_text(section)
+    if not dept or not section:
+        return
+    catalog = get_checklist_catalog()
+    if dept not in catalog:
+        catalog[dept] = {}
+    catalog[dept][section] = [str(x).strip() for x in (items or []) if str(x).strip()]
+    _write_json(CHECKLISTS_CATALOG_FILE, catalog)
+
+def delete_section(dept: str, section: str) -> None:
+    dept = _normalize_text(dept)
+    section = _normalize_text(section)
+    catalog = get_checklist_catalog()
+    if dept in catalog and section in catalog[dept]:
+        del catalog[dept][section]
+        _write_json(CHECKLISTS_CATALOG_FILE, catalog)
+
+# -----------------------------
 # Seed files (NO recursion)
 # -----------------------------
 def ensure_seed_files() -> None:
@@ -300,6 +480,9 @@ def ensure_seed_files() -> None:
     # seed dept_required_skills.json
     if not os.path.exists(DEPT_REQUIRED_SKILLS_FILE):
         save_json(DEPT_REQUIRED_SKILLS_FILE, DEFAULT_DEPT_REQUIRED_SKILLS)
+
+    # seed checklists_catalog.json (HR + MR + Purchase)
+    ensure_checklists_catalog()
 
     # seed people.json
     if not os.path.exists(PEOPLE_FILE):
@@ -344,7 +527,6 @@ def ensure_seed_files() -> None:
         save_json(AUDITS_FILE, {"audits": []})
 
     if not os.path.exists(USERS_FILE):
-        # Build users from people.json directly (no load_people call)
         raw_people = load_json(PEOPLE_FILE, [])
         users = {"users": []}
 
@@ -397,7 +579,6 @@ def load_people() -> List[Person]:
         if not name:
             continue
 
-        # if dept not in catalog, auto-add it (so it becomes dropdown next time)
         if dept and dept.lower() not in dept_lower:
             add_department_to_catalog(dept)
             dept_lower[dept.lower()] = dept
@@ -405,7 +586,6 @@ def load_people() -> List[Person]:
         if level not in {"experienced", "fresher"}:
             raise ValueError(f"Invalid level for {name}: '{level}'. Use 'experienced' or 'fresher'.")
 
-        # ensure all skill keys exist in catalog (avoid crashes)
         for k in list(skills):
             if k not in skill_cat:
                 ensure_skill_key_exists(k, fallback_label=k)
@@ -541,13 +721,10 @@ def create_and_assign_audit(
     if not target_dept:
         return None, "Department is required."
 
-    # ensure department exists in catalog so it appears next time
     add_department_to_catalog(target_dept)
 
-    # required skills: from catalog mapping, or override from UI for custom departments
     if required_skill_keys_override is not None:
         required_skills = set(str(k).strip().lower() for k in required_skill_keys_override if str(k).strip())
-        # ensure keys exist in skills catalog
         for k in list(required_skills):
             ensure_skill_key_exists(k, fallback_label=k)
         if save_required_skills_as_default:
@@ -555,7 +732,7 @@ def create_and_assign_audit(
     else:
         required_skills = get_required_skills_for_dept(target_dept)
 
-    if not required_skills:
+    if not required_skills and target_dept.lower() != "mr":
         return None, "No required skills defined for this department. Enter required skills (or save them as default)."
 
     people = load_people()
@@ -592,6 +769,8 @@ def create_and_assign_audit(
         "reports": [],
         "report_submitted_at": "",
         "closed_at": "",
+        # checklist responses stored here:
+        "checklists": {},  # { dept: { section: [ {sr_no, checklist, observation, evidence}, ... ] } }
     }
 
     audits_data["audits"].append(audit)
@@ -698,6 +877,39 @@ def complete_audit(audit_id: str, auditor_name: str) -> Tuple[bool, str]:
     return True, "Audit completed and auditor unlocked."
 
 # -----------------------------
+# Checklist responses (stored per audit inside audits.json)
+# -----------------------------
+def save_audit_section_table(audit_id: str, dept: str, section: str, rows: List[Dict[str, str]]) -> Tuple[bool, str]:
+    """
+    rows: list of dicts with keys: sr_no, checklist, observation, evidence
+    Stored into: audit["checklists"][dept][section] = rows
+    """
+    dept = _normalize_text(dept)
+    section = _normalize_text(section)
+    if not audit_id or not dept or not section:
+        return False, "audit_id, dept, and section are required."
+
+    a = get_audit(audit_id)
+    if not a:
+        return False, "Audit not found."
+
+    a.setdefault("checklists", {})
+    if dept not in a["checklists"]:
+        a["checklists"][dept] = {}
+    a["checklists"][dept][section] = rows
+
+    _save_updated_audit(a)
+    return True, "Checklist saved."
+
+def load_audit_section_table(audit_id: str, dept: str, section: str) -> Optional[List[Dict[str, str]]]:
+    dept = _normalize_text(dept)
+    section = _normalize_text(section)
+    a = get_audit(audit_id)
+    if not a:
+        return None
+    return a.get("checklists", {}).get(dept, {}).get(section)
+
+# -----------------------------
 # Admin: people + users management
 # -----------------------------
 def list_people_records() -> List[Dict]:
@@ -726,10 +938,8 @@ def add_auditor(
     if not skills:
         return False, "At least one skill is required."
 
-    # ensure department exists in catalog so it appears in dropdown next time
     add_department_to_catalog(department)
 
-    # ensure skill keys exist in catalog
     cleaned_skills: Set[str] = set()
     for k in skills:
         kk = str(k).strip().lower()

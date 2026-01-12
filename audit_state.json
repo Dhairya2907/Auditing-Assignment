@@ -1,0 +1,110 @@
+{
+  "busy_by_name": {
+    "Isha Banerjee": {
+      "audit_id": "4e5d3856-37f2-4aa0-bdc4-1efdf271044d",
+      "audited_department": "Purchase",
+      "required_skills": [
+        "pur_incoming_inspection_linkage",
+        "pur_supplier_agreements_quality_clauses",
+        "pur_supplier_selection_evaluation"
+      ],
+      "level": "experienced",
+      "started_at": "2026-01-06T16:11:45",
+      "status": "ongoing"
+    },
+    "Arjun Kapoor": {
+      "audit_id": "b36bed6b-e1e7-418b-8908-ecad205ede1f",
+      "audited_department": "HR",
+      "required_skills": [
+        "hr_competency_training_requirements",
+        "hr_personnel_regulatory_awareness",
+        "hr_review_training_records_effectiveness"
+      ],
+      "level": "experienced",
+      "started_at": "2026-01-09T14:26:05",
+      "status": "ongoing"
+    },
+    "12345": {
+      "audit_id": "7f1e9e90-f586-4e9c-af52-1e988a747cc4",
+      "audited_department": "MR",
+      "required_skills": [
+        "custom_91e25d6004"
+      ],
+      "level": "experienced",
+      "started_at": "2026-01-09T15:22:51",
+      "status": "ongoing"
+    },
+    "Kyle Jamison": {
+      "audit_id": "5ca0ed7c-54c0-437a-b3be-e666bb15b639",
+      "audited_department": "MR",
+      "required_skills": [
+        "custom_91e25d6004"
+      ],
+      "level": "experienced",
+      "started_at": "2026-01-12T10:53:11",
+      "status": "ongoing"
+    }
+  },
+  "audit_history": [
+    {
+      "audit_id": "b928250d-3d35-4e08-8c17-583f8d7d2169",
+      "auditor_name": "Arjun Kapoor",
+      "audited_department": "HR",
+      "required_skills": [
+        "hr_competency_training_requirements",
+        "hr_personnel_regulatory_awareness",
+        "hr_review_training_records_effectiveness"
+      ],
+      "completed_at": "2026-01-07T12:14:22",
+      "status": "completed"
+    },
+    {
+      "audit_id": "c4455936-39aa-4ac6-844a-6a9b9389e2a1",
+      "auditor_name": "Nikhil Jain",
+      "audited_department": "Purchase",
+      "required_skills": [
+        "pur_incoming_inspection_linkage",
+        "pur_supplier_agreements_quality_clauses",
+        "pur_supplier_selection_evaluation"
+      ],
+      "completed_at": "2026-01-07T12:43:51",
+      "status": "completed"
+    },
+    {
+      "audit_id": "be4720fd-d9ba-46f1-9bc2-bea329670d8d",
+      "auditor_name": "Divya Menon",
+      "audited_department": "HR",
+      "required_skills": [
+        "hr_competency_training_requirements",
+        "hr_personnel_regulatory_awareness",
+        "hr_review_training_records_effectiveness"
+      ],
+      "completed_at": "2026-01-08T10:02:26",
+      "status": "completed"
+    },
+    {
+      "audit_id": "be4720fd-d9ba-46f1-9bc2-bea329670d8d",
+      "auditor_name": "Divya Menon",
+      "audited_department": "HR",
+      "required_skills": [
+        "hr_competency_training_requirements",
+        "hr_personnel_regulatory_awareness",
+        "hr_review_training_records_effectiveness"
+      ],
+      "completed_at": "2026-01-08T10:02:41",
+      "status": "completed"
+    },
+    {
+      "audit_id": "ebda5fd8-e85d-46bb-a1c7-d7d3c8c4b9fc",
+      "auditor_name": "MAITRI",
+      "audited_department": "Production",
+      "required_skills": [
+        "custom_54094c08a4",
+        "custom_786cb63a66",
+        "custom_7fc57d367f"
+      ],
+      "completed_at": "2026-01-08T11:34:01",
+      "status": "completed"
+    }
+  ]
+}

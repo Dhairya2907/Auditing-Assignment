@@ -1,0 +1,25 @@
+{
+  "HR": [
+    "hr_competency_training_requirements",
+    "hr_review_training_records_effectiveness",
+    "hr_personnel_regulatory_awareness"
+  ],
+  "Purchase": [
+    "pur_supplier_selection_evaluation",
+    "pur_incoming_inspection_linkage",
+    "pur_supplier_agreements_quality_clauses"
+  ],
+  "Sales and Marketing": [
+    "sm_labeling_claims_control",
+    "sm_customer_communication_feedback",
+    "sm_complaint_intake_escalation"
+  ],
+  "Production": [
+    "custom_54094c08a4",
+    "custom_786cb63a66",
+    "custom_7fc57d367f"
+  ],
+  "MR": [
+    "custom_91e25d6004"
+  ]
+}

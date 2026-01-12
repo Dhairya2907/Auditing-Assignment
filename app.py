@@ -136,6 +136,7 @@ def get_department_options_with_other() -> List[str]:
 def get_skill_catalog() -> Dict[str, str]:
     return engine.load_skills_catalog()
 
+
 # -----------------------------
 # Login UI
 # -----------------------------
@@ -188,18 +189,48 @@ st.sidebar.write(f"Logged in as: **{username}**")
 st.sidebar.write(f"Role: **{role}**")
 st.sidebar.button("Logout", on_click=logout)
 
+all_audits = engine.list_audits()
+
+# -----------------------------
+# Sidebar menus with nested Checklist
+# -----------------------------
+checklist_department = None
+
 if role == "admin":
     page = st.sidebar.radio(
         "Admin Menu",
-        ["Dashboard", "Auditors & Skills", "Create & Assign Audit", "Audit Plan", "Audit Details"],
+        ["Dashboard", "Auditors & Skills", "Create & Assign Audit", "Audit Plan", "Checklist", "Audit Details"],
+        key="admin_menu_radio"
     )
+
+    if page == "Checklist":
+        st.sidebar.markdown("**Checklist sub-menu**")
+        checklist_department = st.sidebar.radio(
+            "Department",
+            options=engine.load_departments_catalog(),
+            key="admin_checklist_dept_radio"
+        )
+
 else:
     page = st.sidebar.radio(
         "Auditor Menu",
-        ["My Audits", "My Timetable", "Audit Details"],
+        ["My Audits", "My Timetable", "Checklist", "Audit Details"],
+        key="auditor_menu_radio"
     )
 
-all_audits = engine.list_audits()
+    if page == "Checklist":
+        st.sidebar.markdown("**Checklist sub-menu**")
+        my_audits = [a for a in all_audits if a.get("assigned_auditor") == person_name]
+        my_depts = sorted({(a.get("audited_department") or "").strip() for a in my_audits if (a.get("audited_department") or "").strip()},
+                          key=lambda x: x.lower())
+        if not my_depts:
+            checklist_department = None
+        else:
+            checklist_department = st.sidebar.radio(
+                "Department",
+                options=my_depts,
+                key="auditor_checklist_dept_radio"
+            )
 
 # -----------------------------
 # Admin Pages
@@ -258,7 +289,6 @@ elif role == "admin" and page == "Auditors & Skills":
                 format_func=lambda k: (skill_cat.get(k, k) if k != "OTHER" else "Other"),
             )
 
-            custom_skills_text = ""
             custom_skill_keys: List[str] = []
             if "OTHER" in selected_skill_keys:
                 custom_skills_text = st.text_area(
@@ -267,7 +297,6 @@ elif role == "admin" and page == "Auditors & Skills":
                     height=120,
                 )
                 custom_labels = [s.strip() for s in custom_skills_text.splitlines() if s.strip()]
-                # create skills in catalog now, get keys
                 for lbl in custom_labels:
                     k = engine.ensure_skill_in_catalog(lbl)
                     custom_skill_keys.append(k)
@@ -285,7 +314,6 @@ elif role == "admin" and page == "Auditors & Skills":
             elif not final_skill_keys:
                 st.error("Please select at least one skill.")
             else:
-                # if department is new, save into catalog so it appears next time
                 if dept_choice == "Other" and department.strip():
                     engine.add_department_to_catalog(department.strip())
 
@@ -445,7 +473,6 @@ elif role == "admin" and page == "Audit Plan":
             custom_dept = st.text_input("Enter new department to audit", key="tt_custom_dept")
         audited_dept = custom_dept.strip() if dept_choice == "Other" else dept_choice
 
-        # required skills from saved mapping or manual
         required = engine.get_required_skills_for_dept(audited_dept) if audited_dept else set()
         save_as_default = False
         if required:
@@ -496,7 +523,6 @@ elif role == "admin" and page == "Audit Plan":
             elif auditor is None:
                 st.error("No eligible auditor available.")
             else:
-                # persist department + required skills if requested
                 engine.add_department_to_catalog(audited_dept)
                 if save_as_default:
                     engine.set_dept_required_skills(audited_dept, sorted(required))
@@ -539,6 +565,147 @@ elif role == "admin" and page == "Audit Plan":
                 else:
                     st.error(msg)
 
+elif role == "admin" and page == "Checklist":
+    st.title("Checklist (Admin)")
+    st.caption("Create department-wise checklists with sections. Auditors will fill Observation and Evidence during audits.")
+
+    import pandas as pd
+
+    if not checklist_department:
+        st.info("Select a department from the sidebar Checklist sub-menu.")
+        st.stop()
+
+    dept_for_checklist = checklist_department
+
+    st.subheader(f"Department: {dept_for_checklist}")
+
+    sections = engine.get_sections_for_department(dept_for_checklist)
+    pick_section = st.selectbox("Section", ["(Create New)"] + sections, key=f"chk_admin_section_{dept_for_checklist}")
+
+    new_section = ""
+    if pick_section == "(Create New)":
+        new_section = st.text_input("New Section Name", key=f"chk_admin_new_section_{dept_for_checklist}").strip()
+
+    section_name = new_section if pick_section == "(Create New)" else pick_section
+
+    existing_items = engine.get_items_for_department_section(dept_for_checklist, section_name) if section_name else []
+    st.write("Edit checklist items below. One row = one checklist point.")
+
+    df_items = pd.DataFrame({"Checklist": existing_items if existing_items else [""]})
+
+    edited_df = st.data_editor(
+        df_items,
+        use_container_width=True,
+        num_rows="dynamic",
+        key=f"chk_admin_editor_{dept_for_checklist}_{section_name or 'blank'}",
+    )
+
+    cA, cB, cC = st.columns([1, 1, 2])
+
+    with cA:
+        if st.button("Save Section Checklist", type="primary", key=f"chk_admin_save_{dept_for_checklist}"):
+            if not section_name:
+                st.error("Please select an existing section or enter a new section name.")
+            else:
+                cleaned = [str(x).strip() for x in edited_df["Checklist"].tolist() if str(x).strip()]
+                engine.upsert_section_items(dept_for_checklist, section_name, cleaned)
+                st.success(f"Saved checklist for: {dept_for_checklist} → {section_name}")
+                st.rerun()
+
+    with cB:
+        if pick_section != "(Create New)" and st.button("Delete Section", key=f"chk_admin_delete_{dept_for_checklist}_{pick_section}"):
+            engine.delete_section(dept_for_checklist, pick_section)
+            st.success(f"Deleted section: {dept_for_checklist} → {pick_section}")
+            st.rerun()
+
+    with cC:
+        st.info("Tip: Create sections like Resource Planning, Onboarding, Training Planning, etc.")
+
+elif role == "auditor" and page == "Checklist":
+    st.title("Checklist (Auditor)")
+    st.caption("Pick your department from sidebar; then select the audit and section to fill Observation and Evidence.")
+
+    import pandas as pd
+
+    my_audits = [a for a in all_audits if a.get("assigned_auditor") == person_name]
+
+    if not my_audits:
+        st.info("No audits assigned to you yet.")
+        st.stop()
+
+    if not checklist_department:
+        st.info("Select a department from the sidebar Checklist sub-menu.")
+        st.stop()
+
+    dept = checklist_department
+    dept_audits = [a for a in my_audits if (a.get("audited_department") or "").strip().lower() == dept.strip().lower()]
+
+    if not dept_audits:
+        st.info(f"No audits assigned to you for department: {dept}")
+        st.stop()
+
+    audit_options = [
+        f'{a.get("audit_id")} | {a.get("title") or "-"} | Status: {a.get("status")}'
+        for a in dept_audits
+    ]
+    pick = st.selectbox("Select Audit", options=audit_options, key=f"aud_chk_pick_audit_{dept}")
+
+    audit_id = pick.split("|", 1)[0].strip()
+    audit = engine.get_audit(audit_id)
+
+    if not audit:
+        st.error("Audit not found.")
+        st.stop()
+
+    sections = engine.get_sections_for_department(dept)
+    if not sections:
+        st.info(f"No checklist sections found for department '{dept}'. Ask Admin to create them.")
+        st.stop()
+
+    section = st.selectbox("Select Checklist Section", options=sections, key=f"aud_chk_section_{audit_id}_{dept}")
+
+    saved_rows = engine.load_audit_section_table(audit_id, dept, section)
+    if saved_rows:
+        df = pd.DataFrame(saved_rows)
+        df = df.rename(columns={
+            "sr_no": "SR No",
+            "checklist": "Checklist",
+            "observation": "Observation",
+            "evidence": "Evidence",
+        })
+    else:
+        items = engine.get_items_for_department_section(dept, section)
+        df = pd.DataFrame({
+            "SR No": list(range(1, len(items) + 1)),
+            "Checklist": items,
+            "Observation": ["" for _ in items],
+            "Evidence": ["" for _ in items],
+        })
+
+    st.caption("Fill Observation and Evidence. SR No and Checklist are locked.")
+    edited = st.data_editor(
+        df,
+        use_container_width=True,
+        disabled=["SR No", "Checklist"],
+        key=f"aud_chk_editor_{audit_id}_{dept}_{section}",
+    )
+
+    if st.button("Save Checklist Observations", type="primary", key=f"aud_chk_save_{audit_id}_{dept}_{section}"):
+        rows_to_save = []
+        for _, r in edited.iterrows():
+            rows_to_save.append({
+                "sr_no": str(r.get("SR No", "")).strip(),
+                "checklist": str(r.get("Checklist", "")).strip(),
+                "observation": str(r.get("Observation", "")).strip(),
+                "evidence": str(r.get("Evidence", "")).strip(),
+            })
+        ok, msg = engine.save_audit_section_table(audit_id, dept, section, rows_to_save)
+        if ok:
+            st.success(f"Saved: {dept} → {section}")
+            st.rerun()
+        else:
+            st.error(msg)
+
 elif (role == "admin" and page == "Audit Details") or (role == "auditor" and page == "Audit Details"):
     st.title("Audit Details")
 
@@ -573,6 +740,78 @@ elif (role == "admin" and page == "Audit Details") or (role == "auditor" and pag
     st.write("**Due:**", audit.get("due_date") or "-")
     st.write("**Report Submitted At:**", audit.get("report_submitted_at") or "-")
     st.write("**Closed At:**", audit.get("closed_at") or "-")
+
+    # -----------------------------
+    # Section-wise checklist (Admin view + Auditor fill)
+    # -----------------------------
+    st.divider()
+    st.subheader("Department Checklist (Section-wise)")
+
+    import pandas as pd
+
+    dept = audit.get("audited_department", "")
+    sections = engine.get_sections_for_department(dept)
+
+    if not sections:
+        if role == "admin":
+            st.info(
+                f"No checklist sections found for department '{dept}'. "
+                "Go to Admin Menu → Checklist to add sections and items."
+            )
+        else:
+            st.info(
+                f"No checklist sections found for department '{dept}'. "
+                "Ask Admin to add checklist sections and items."
+            )
+    else:
+        section = st.selectbox("Select Checklist Section", options=sections, key=f"sec_pick_{audit.get('audit_id')}")
+
+        saved_rows = engine.load_audit_section_table(audit.get("audit_id"), dept, section)
+
+        if saved_rows:
+            df = pd.DataFrame(saved_rows)
+            df = df.rename(columns={
+                "sr_no": "SR No",
+                "checklist": "Checklist",
+                "observation": "Observation",
+                "evidence": "Evidence",
+            })
+        else:
+            items = engine.get_items_for_department_section(dept, section)
+            df = pd.DataFrame({
+                "SR No": list(range(1, len(items) + 1)),
+                "Checklist": items,
+                "Observation": ["" for _ in items],
+                "Evidence": ["" for _ in items],
+            })
+
+        if role == "auditor":
+            st.caption("Fill Observation and Evidence. SR No and Checklist are locked.")
+            edited = st.data_editor(
+                df,
+                use_container_width=True,
+                disabled=["SR No", "Checklist"],
+                key=f"aud_chk_{audit.get('audit_id')}_{section}",
+            )
+
+            if st.button("Save Checklist Observations", type="primary", key=f"save_chk_{audit.get('audit_id')}_{section}"):
+                rows_to_save = []
+                for _, r in edited.iterrows():
+                    rows_to_save.append({
+                        "sr_no": str(r.get("SR No", "")).strip(),
+                        "checklist": str(r.get("Checklist", "")).strip(),
+                        "observation": str(r.get("Observation", "")).strip(),
+                        "evidence": str(r.get("Evidence", "")).strip(),
+                    })
+                ok, msg = engine.save_audit_section_table(audit.get("audit_id"), dept, section, rows_to_save)
+                if ok:
+                    st.success(f"Saved: {dept} → {section}")
+                    st.rerun()
+                else:
+                    st.error(msg)
+        else:
+            st.caption("Admin view (read-only). Auditors fill Observation and Evidence.")
+            st.dataframe(df, use_container_width=True, hide_index=True)
 
     st.subheader("Reports")
     reports = audit.get("reports", [])
@@ -701,4 +940,3 @@ elif role == "auditor" and page == "My Timetable":
             tdf = pd.DataFrame(today_rows, columns=["Date", "Time Slot", "Department to Audit", "Auditor"])
             tdf = tdf.sort_values(by=["Time Slot"])
             st.table(tdf[["Time Slot", "Department to Audit"]])
-

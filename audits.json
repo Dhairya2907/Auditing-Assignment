@@ -1,0 +1,288 @@
+{
+  "audits": [
+    {
+      "audit_id": "b928250d-3d35-4e08-8c17-583f8d7d2169",
+      "title": "January Audit",
+      "scope": "",
+      "audited_department": "HR",
+      "required_skills": [
+        "hr_competency_training_requirements",
+        "hr_personnel_regulatory_awareness",
+        "hr_review_training_records_effectiveness"
+      ],
+      "assigned_auditor": "Arjun Kapoor",
+      "auditor_level": "experienced",
+      "status": "Closed",
+      "created_by": "admin",
+      "created_at": "2026-01-06T15:52:58",
+      "due_date": "",
+      "reports": [
+        {
+          "file_name": "Dhairya Time Sheet.xlsx",
+          "saved_path": "uploads\\audit_b928250d-3d35-4e08-8c17-583f8d7d2169\\4028f6adf78f4eb18b11fd497332d458_Dhairya Time Sheet.xlsx",
+          "uploaded_at": "2026-01-07T12:14:19",
+          "uploaded_by": "Arjun Kapoor"
+        }
+      ],
+      "report_submitted_at": "2026-01-07T12:14:21",
+      "closed_at": "2026-01-07T12:14:22",
+      "checklists": {
+        "HR": {
+          "Resource Planning": [
+            {
+              "sr_no": "1",
+              "checklist": "Has top management determined the need for resources and documented it?",
+              "observation": "",
+              "evidence": ""
+            },
+            {
+              "sr_no": "2",
+              "checklist": "Was the Resource Plan prepared as per the decided time period?",
+              "observation": "",
+              "evidence": ""
+            },
+            {
+              "sr_no": "3",
+              "checklist": "Were process owners involved in preparing the Resource Plan?",
+              "observation": "",
+              "evidence": ""
+            },
+            {
+              "sr_no": "4",
+              "checklist": "Is there evidence of consultation with Top Management and MR?",
+              "observation": "",
+              "evidence": ""
+            },
+            {
+              "sr_no": "5",
+              "checklist": "Is the Resource Plan reviewed during Management Review Meetings (MRM) and documented?",
+              "observation": "",
+              "evidence": ""
+            }
+          ],
+          "Competency & Skill Management": [
+            {
+              "sr_no": "1",
+              "checklist": "Are employee skills identified within 7 days of joining?",
+              "observation": "",
+              "evidence": ""
+            },
+            {
+              "sr_no": "2",
+              "checklist": "Is the Skill Matrix available and updated?",
+              "observation": "",
+              "evidence": ""
+            },
+            {
+              "sr_no": "3",
+              "checklist": "Is the Skill Matrix reviewed as per the decided time period?",
+              "observation": "",
+              "evidence": ""
+            },
+            {
+              "sr_no": "4",
+              "checklist": "Are improvements in skills documented and updated?",
+              "observation": "",
+              "evidence": "asdfghnj"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "audit_id": "be4720fd-d9ba-46f1-9bc2-bea329670d8d",
+      "title": "Audit no2",
+      "scope": "",
+      "audited_department": "HR",
+      "required_skills": [
+        "hr_competency_training_requirements",
+        "hr_personnel_regulatory_awareness",
+        "hr_review_training_records_effectiveness"
+      ],
+      "assigned_auditor": "Divya Menon",
+      "auditor_level": "experienced",
+      "status": "Closed",
+      "created_by": "admin",
+      "created_at": "2026-01-06T16:00:26",
+      "due_date": "",
+      "reports": [
+        {
+          "file_name": "Dhairya Time Sheet.xlsx",
+          "saved_path": "uploads\\audit_be4720fd-d9ba-46f1-9bc2-bea329670d8d\\9b95b11d7e0c44468c68e57d98fb351f_Dhairya Time Sheet.xlsx",
+          "uploaded_at": "2026-01-08T10:02:23",
+          "uploaded_by": "Divya Menon"
+        },
+        {
+          "file_name": "Dhairya Time Sheet.xlsx",
+          "saved_path": "uploads\\audit_be4720fd-d9ba-46f1-9bc2-bea329670d8d\\23bf0e9cf5d04b0ea7c93d4dc93cbca8_Dhairya Time Sheet.xlsx",
+          "uploaded_at": "2026-01-08T10:02:38",
+          "uploaded_by": "Divya Menon"
+        }
+      ],
+      "report_submitted_at": "2026-01-08T10:02:39",
+      "closed_at": "2026-01-08T10:02:41"
+    },
+    {
+      "audit_id": "4e5d3856-37f2-4aa0-bdc4-1efdf271044d",
+      "title": "Audit no3",
+      "scope": "",
+      "audited_department": "Purchase",
+      "required_skills": [
+        "pur_incoming_inspection_linkage",
+        "pur_supplier_agreements_quality_clauses",
+        "pur_supplier_selection_evaluation"
+      ],
+      "assigned_auditor": "Isha Banerjee",
+      "auditor_level": "experienced",
+      "status": "Closed",
+      "created_by": "admin",
+      "created_at": "2026-01-06T16:11:45",
+      "due_date": "",
+      "reports": [],
+      "report_submitted_at": "",
+      "closed_at": ""
+    },
+    {
+      "audit_id": "c4455936-39aa-4ac6-844a-6a9b9389e2a1",
+      "title": "Audit no4",
+      "scope": "",
+      "audited_department": "Purchase",
+      "required_skills": [
+        "pur_incoming_inspection_linkage",
+        "pur_supplier_agreements_quality_clauses",
+        "pur_supplier_selection_evaluation"
+      ],
+      "assigned_auditor": "Nikhil Jain",
+      "auditor_level": "experienced",
+      "status": "Closed",
+      "created_by": "admin",
+      "created_at": "2026-01-07T12:38:55",
+      "due_date": "",
+      "reports": [
+        {
+          "file_name": "Dhairya Time Sheet.xlsx",
+          "saved_path": "uploads\\audit_c4455936-39aa-4ac6-844a-6a9b9389e2a1\\1844c09e4460463aaaf75060174fc6a7_Dhairya Time Sheet.xlsx",
+          "uploaded_at": "2026-01-07T12:43:46",
+          "uploaded_by": "Nikhil Jain"
+        }
+      ],
+      "report_submitted_at": "2026-01-07T12:43:49",
+      "closed_at": "2026-01-07T12:43:51"
+    },
+    {
+      "audit_id": "ebda5fd8-e85d-46bb-a1c7-d7d3c8c4b9fc",
+      "title": "hello",
+      "scope": "",
+      "audited_department": "Production",
+      "required_skills": [
+        "custom_54094c08a4",
+        "custom_786cb63a66",
+        "custom_7fc57d367f"
+      ],
+      "assigned_auditor": "MAITRI",
+      "auditor_level": "experienced",
+      "status": "Closed",
+      "created_by": "admin",
+      "created_at": "2026-01-08T10:46:49",
+      "due_date": "",
+      "reports": [
+        {
+          "file_name": "Biological Evaluation Plan.pdf",
+          "saved_path": "uploads\\audit_ebda5fd8-e85d-46bb-a1c7-d7d3c8c4b9fc\\ea67385db0e646d8a1c22ba534012b38_Biological Evaluation Plan.pdf",
+          "uploaded_at": "2026-01-08T11:33:55",
+          "uploaded_by": "MAITRI"
+        }
+      ],
+      "report_submitted_at": "2026-01-08T11:33:59",
+      "closed_at": "2026-01-08T11:34:01"
+    },
+    {
+      "audit_id": "b36bed6b-e1e7-418b-8908-ecad205ede1f",
+      "title": "AARAHA KYA COFFEE PINEEE",
+      "scope": "",
+      "audited_department": "HR",
+      "required_skills": [
+        "hr_competency_training_requirements",
+        "hr_personnel_regulatory_awareness",
+        "hr_review_training_records_effectiveness"
+      ],
+      "assigned_auditor": "Arjun Kapoor",
+      "auditor_level": "experienced",
+      "status": "Assigned",
+      "created_by": "admin",
+      "created_at": "2026-01-09T14:26:05",
+      "due_date": "",
+      "reports": [],
+      "report_submitted_at": "",
+      "closed_at": "",
+      "checklists": {
+        "HR": {
+          "Competency & Skill Management": [
+            {
+              "sr_no": "1",
+              "checklist": "Are employee skills identified within 7 days of joining?",
+              "observation": "YES MANY",
+              "evidence": ""
+            },
+            {
+              "sr_no": "2",
+              "checklist": "Is the Skill Matrix available and updated?",
+              "observation": "YES UPTO DATE",
+              "evidence": ""
+            },
+            {
+              "sr_no": "3",
+              "checklist": "Is the Skill Matrix reviewed as per the decided time period?",
+              "observation": "NO NOT",
+              "evidence": ""
+            },
+            {
+              "sr_no": "4",
+              "checklist": "Are improvements in skills documented and updated?",
+              "observation": "No",
+              "evidence": ""
+            }
+          ]
+        }
+      }
+    },
+    {
+      "audit_id": "7f1e9e90-f586-4e9c-af52-1e988a747cc4",
+      "title": "asdfgh",
+      "scope": "",
+      "audited_department": "MR",
+      "required_skills": [
+        "custom_91e25d6004"
+      ],
+      "assigned_auditor": "12345",
+      "auditor_level": "experienced",
+      "status": "Assigned",
+      "created_by": "admin",
+      "created_at": "2026-01-09T15:22:51",
+      "due_date": "",
+      "reports": [],
+      "report_submitted_at": "",
+      "closed_at": "",
+      "checklists": {}
+    },
+    {
+      "audit_id": "5ca0ed7c-54c0-437a-b3be-e666bb15b639",
+      "title": "INDIA",
+      "scope": "",
+      "audited_department": "MR",
+      "required_skills": [
+        "custom_91e25d6004"
+      ],
+      "assigned_auditor": "Kyle Jamison",
+      "auditor_level": "experienced",
+      "status": "Assigned",
+      "created_by": "admin",
+      "created_at": "2026-01-12T10:53:11",
+      "due_date": "",
+      "reports": [],
+      "report_submitted_at": "",
+      "closed_at": "",
+      "checklists": {}
+    }
+  ]
+}

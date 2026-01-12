@@ -1,0 +1,177 @@
+[
+  {
+    "name": "Priya",
+    "department": "HR",
+    "skills": [
+      "hr_competency_training_requirements",
+      "hr_review_training_records_effectiveness",
+      "hr_personnel_regulatory_awareness"
+    ],
+    "level": "experienced"
+  },
+  {
+    "name": "Arjun Kapoor",
+    "department": "Purchase",
+    "level": "experienced",
+    "skills": [
+      "hr_competency_training_requirements",
+      "hr_review_training_records_effectiveness",
+      "hr_personnel_regulatory_awareness",
+      "pur_supplier_selection_evaluation"
+    ]
+  },
+  {
+    "name": "Kunal Shah",
+    "department": "Purchase",
+    "level": "experienced",
+    "skills": [
+      "hr_competency_training_requirements",
+      "hr_review_training_records_effectiveness",
+      "hr_personnel_regulatory_awareness",
+      "pur_incoming_inspection_linkage"
+    ]
+  },
+  {
+    "name": "Divya Menon",
+    "department": "Sales and Marketing",
+    "level": "experienced",
+    "skills": [
+      "hr_competency_training_requirements",
+      "hr_review_training_records_effectiveness",
+      "hr_personnel_regulatory_awareness",
+      "sm_labeling_claims_control"
+    ]
+  },
+  {
+    "name": "Rohan Gupta",
+    "department": "Purchase",
+    "level": "experienced",
+    "skills": [
+      "hr_competency_training_requirements",
+      "hr_review_training_records_effectiveness",
+      "hr_personnel_regulatory_awareness",
+      "pur_supplier_agreements_quality_clauses"
+    ]
+  },
+  {
+    "name": "Sana Qureshi",
+    "department": "HR",
+    "level": "experienced",
+    "skills": [
+      "pur_supplier_selection_evaluation",
+      "pur_incoming_inspection_linkage",
+      "pur_supplier_agreements_quality_clauses",
+      "hr_personnel_regulatory_awareness"
+    ]
+  },
+  {
+    "name": "Isha Banerjee",
+    "department": "HR",
+    "level": "experienced",
+    "skills": [
+      "pur_supplier_selection_evaluation",
+      "pur_incoming_inspection_linkage",
+      "pur_supplier_agreements_quality_clauses",
+      "hr_review_training_records_effectiveness"
+    ]
+  },
+  {
+    "name": "Pallavi Desai",
+    "department": "HR",
+    "level": "experienced",
+    "skills": [
+      "pur_supplier_selection_evaluation",
+      "pur_incoming_inspection_linkage",
+      "pur_supplier_agreements_quality_clauses",
+      "hr_competency_training_requirements"
+    ]
+  },
+  {
+    "name": "Aditya Rao",
+    "department": "HR",
+    "level": "experienced",
+    "skills": [
+      "sm_labeling_claims_control",
+      "sm_customer_communication_feedback",
+      "sm_complaint_intake_escalation",
+      "hr_competency_training_requirements"
+    ]
+  },
+  {
+    "name": "Farah Siddiqui",
+    "department": "Purchase",
+    "level": "experienced",
+    "skills": [
+      "sm_labeling_claims_control",
+      "sm_customer_communication_feedback",
+      "sm_complaint_intake_escalation",
+      "pur_incoming_inspection_linkage"
+    ]
+  },
+  {
+    "name": "Neelam Chauhan",
+    "department": "Purchase",
+    "level": "experienced",
+    "skills": [
+      "sm_labeling_claims_control",
+      "sm_customer_communication_feedback",
+      "sm_complaint_intake_escalation",
+      "pur_supplier_agreements_quality_clauses"
+    ]
+  },
+  {
+    "name": "MAITRI",
+    "department": "HR",
+    "skills": [
+      "custom_54094c08a4",
+      "custom_786cb63a66",
+      "custom_7fc57d367f"
+    ],
+    "level": "experienced"
+  },
+  {
+    "name": "Devarsh Patel",
+    "department": "MR",
+    "skills": [
+      "custom_54094c08a4",
+      "custom_59738d4264",
+      "custom_786cb63a66",
+      "custom_7fc57d367f",
+      "custom_91e25d6004",
+      "custom_e7fdc00aff",
+      "hr_competency_training_requirements",
+      "hr_personnel_regulatory_awareness",
+      "hr_review_training_records_effectiveness",
+      "pur_incoming_inspection_linkage",
+      "pur_supplier_agreements_quality_clauses",
+      "pur_supplier_selection_evaluation",
+      "sm_complaint_intake_escalation",
+      "sm_customer_communication_feedback",
+      "sm_labeling_claims_control"
+    ],
+    "level": "experienced"
+  },
+  {
+    "name": "12345",
+    "department": "HR",
+    "skills": [
+      "custom_786cb63a66",
+      "custom_91e25d6004"
+    ],
+    "level": "experienced"
+  },
+  {
+    "name": "Kyle Jamison",
+    "department": "HR",
+    "skills": [
+      "custom_54094c08a4",
+      "custom_59738d4264",
+      "custom_786cb63a66",
+      "custom_7fc57d367f",
+      "custom_91e25d6004",
+      "custom_e7fdc00aff",
+      "hr_competency_training_requirements"
+    ],
+    "level": "experienced"
+  }
+]
