@@ -1,7 +1,9 @@
 import streamlit as st
-from typing import List, Dict, Set
+from typing import List, Dict, Set, Optional
 from datetime import datetime, date
 from zoneinfo import ZoneInfo
+import os
+import json
 
 import engine
 import timetable  # timetable.py must be in same folder
@@ -15,6 +17,178 @@ st.set_page_config(
 engine.ensure_seed_files()
 
 # -----------------------------
+# Checklist catalog seeding (safe, does not depend on ensure_checklist_catalog)
+# -----------------------------
+CHECKLIST_CANDIDATE_FILES = [
+    "checklist.catalog.json",     # your file
+    "checklist_catalog.json",
+    "checklists_catalog.json",
+]
+
+def _find_checklist_catalog_file() -> str:
+    for fn in CHECKLIST_CANDIDATE_FILES:
+        if os.path.exists(fn):
+            return fn
+    return CHECKLIST_CANDIDATE_FILES[0]
+
+def _load_json_file(path: str, default):
+    try:
+        if not os.path.exists(path):
+            return default
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+def _save_json_file(path: str, obj) -> None:
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(obj, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, path)
+
+def _ensure_dict(d) -> dict:
+    return d if isinstance(d, dict) else {}
+
+def ensure_checklist_seed_data():
+    """
+    Seeds Management Review, Purchase and Supplier, and HR into checklist catalog file.
+    Additive only; does not delete existing data.
+    """
+    path = _find_checklist_catalog_file()
+    catalog = _ensure_dict(_load_json_file(path, {}))
+
+    if not isinstance(catalog, dict):
+        catalog = {}
+
+    seed: Dict[str, Dict[str, List[str]]] = {
+        "Management Review": {
+            "General Requirements": [
+                "Does top management conduct management reviews at planned intervals?",
+                "Is MRM plan documented?",
+                "Is the management review procedure defined and implemented?",
+                "Are management review records maintained?",
+                "Is MRM notice sent, acknowledged by respective personnel, and documented?",
+                "Is the MRM attendance documented?",
+            ],
+            "Management Review Inputs": [
+                "Results of internal and external audits reviewed and documented",
+                "Customer feedback (including complaints) reviewed and documented",
+                "Process performance and product conformity reviewed and documented",
+                "Status of preventive and corrective actions reviewed and documented",
+                "Follow-up actions from previous management reviews reviewed and documented",
+                "Changes that could affect the QMS (regulatory, organizational, product-related) reviewed and documented",
+                "Recommendations for improvement reviewed and documented",
+                "New or revised regulatory requirements applicable to medical devices reviewed and documented",
+                "Resource needs (human, infrastructure, work environment) reviewed and documented",
+            ],
+            "Conduct of Management Review": [
+                "Is the management review chaired or attended by top management?",
+                "Are relevant process owners involved as required?",
+                "Are discussions aligned with the planned agenda?",
+            ],
+            "Management Review Outputs": [
+                "Decisions/actions documented for improvement of the effectiveness of the QMS",
+                "Decisions/actions documented for improvement of product-related processes",
+                "Decisions/actions documented for improvement of medical device safety and performance",
+                "Resource requirements documented",
+                "Actions addressing identified risks documented",
+                "Responsibilities and timelines assigned for actions",
+            ],
+            "Follow-up & Records": [
+                "Is the effectiveness of previous actions reviewed in subsequent MRMs?",
+                "Are management review minutes legible, dated, and approved?",
+            ],
+        },
+        "Purchase and Supplier": {
+            "Supplier Selection": [
+                "Is supplier selection initiated when a new material, component, or service is required?",
+                "Does the Purchase Department identify potential suppliers?",
+                "Are supplier identification sources documented?",
+                "Are suppliers evaluated based on defined selection criteria?",
+                "Are suppliers categorized based on risk-based approach?",
+            ],
+            "Supplier Evaluation & Approval": [
+                "Is Supplier Assessment completed for potential suppliers?",
+                "Is the completed assessment reviewed?",
+                "Are suppliers evaluated and scored as per defined criteria?",
+                "Are approved suppliers included in Approved Supplier List?",
+                "For critical suppliers, is Supplier Quality Agreement executed before approval?",
+            ],
+            "Control of Outsourced Processes": [
+                "Are outsourced processes assigned only to approved suppliers?",
+                "Is verification of certificates and reports from outsourced activities carried out?",
+            ],
+            "Purchase Order Control": [
+                "Is supplier verification against the Approved Supplier List performed before PO issuance?",
+                "Is Supplier Selection & Evaluation initiated if the supplier is not approved?",
+                "Are POs reviewed and approved by authorized personnel?",
+                "Are PO records maintained?",
+            ],
+            "Verification of Purchased Product": [
+                "Is Incoming Inspection conducted as per approved procedure or specifications?",
+                "Are inspection results documented?",
+                "Are inspection outcomes (acceptance/rejection/deviation/concession) linked to the supplier?",
+                "Are non-conforming items recorded?",
+                "Are inspection results used for supplier performance monitoring?",
+            ],
+            "Supplier Performance Evaluation": [
+                "Is supplier performance evaluated based on defined parameters?",
+                "Are suppliers classified according to defined rating scale?",
+                "Are suppliers evaluated as per defined time period?",
+                "Are supplier audits conducted when required?",
+                "Is SCAR issued to the suppliers when required?",
+                "Are supplier ratings reviewed in Management Review Meetings?",
+            ],
+            "Supplier Re-evaluation": [
+                "Is re-evaluation initiated based on performance monitoring results?",
+                "Are re-evaluation outcomes documented?",
+            ],
+        },
+        "HR": {
+            "Resource Planning": [
+                "Is manpower planning performed at planned intervals?",
+                "Are roles and responsibilities defined for all positions?",
+                "Are competency requirements defined for each role?",
+            ],
+            "Onboarding": [
+                "Is an onboarding plan available for new joiners?",
+                "Are onboarding records maintained (induction, training schedule, acknowledgements)?",
+            ],
+            "Training Planning": [
+                "Is an annual training plan prepared based on role competency requirements?",
+                "Is training need identification documented (gap assessment)?",
+            ],
+            "Training Execution & Records": [
+                "Are training records maintained (attendance, trainer, topic, date)?",
+                "Are trainees assessed where applicable (quiz, observation, supervision sign-off)?",
+            ],
+            "Training Effectiveness": [
+                "Is training effectiveness evaluated and documented?",
+                "Are re-trainings or corrective actions initiated if effectiveness is not met?",
+            ],
+            "Regulatory & QMS Awareness": [
+                "Are personnel aware of applicable regulatory/QMS requirements relevant to their roles?",
+                "Is awareness training conducted for changes to procedures or regulations?",
+            ],
+        },
+    }
+
+    changed = False
+    for dept, sections in seed.items():
+        if dept not in catalog or not isinstance(catalog.get(dept), dict):
+            catalog[dept] = {}
+            changed = True
+        for sec, items in sections.items():
+            if sec not in catalog[dept] or not isinstance(catalog[dept].get(sec), list) or len(catalog[dept].get(sec, [])) == 0:
+                catalog[dept][sec] = items
+                changed = True
+
+    if changed:
+        _save_json_file(path, catalog)
+
+ensure_checklist_seed_data()
+
+# -----------------------------
 # Session state
 # -----------------------------
 if "auth" not in st.session_state:
@@ -25,7 +199,6 @@ if "auth" not in st.session_state:
         "person_name": None,
     }
 
-
 def logout():
     st.session_state.auth = {
         "logged_in": False,
@@ -35,11 +208,9 @@ def logout():
     }
     st.rerun()
 
-
 def require_login():
     if not st.session_state.auth["logged_in"]:
         st.stop()
-
 
 def audits_table(audits: List[Dict]):
     if not audits:
@@ -62,14 +233,12 @@ def audits_table(audits: List[Dict]):
         )
     st.dataframe(rows, use_container_width=True, hide_index=True)
 
-
 # -----------------------------
 # Timetable reminder helpers
 # -----------------------------
 def _parse_slot_start_end(slot_str: str):
     start_s, end_s = slot_str.split("-", 1)
     return start_s.strip(), end_s.strip()
-
 
 def show_auditor_timetable_reminder(auditor_name: str, remind_within_minutes: int = 30):
     try:
@@ -126,7 +295,6 @@ def show_auditor_timetable_reminder(auditor_name: str, remind_within_minutes: in
         if mins <= remind_within_minutes:
             st.info(f"🔔 You have an audit in **{mins} min** at **{slot.split('-')[0]}** for **{dept}**.")
 
-
 # -----------------------------
 # Helpers: persistent dropdown options
 # -----------------------------
@@ -136,6 +304,10 @@ def get_department_options_with_other() -> List[str]:
 def get_skill_catalog() -> Dict[str, str]:
     return engine.load_skills_catalog()
 
+def _get_checklist_catalog_depts() -> List[str]:
+    path = _find_checklist_catalog_file()
+    catalog = _ensure_dict(_load_json_file(path, {}))
+    return sorted([k for k in catalog.keys() if str(k).strip()], key=lambda x: str(x).lower())
 
 # -----------------------------
 # Login UI
@@ -171,7 +343,6 @@ if not st.session_state.auth["logged_in"]:
     st.write("- Auditor: username is lowercase name (no spaces), password: **auditor123**")
     st.stop()
 
-
 # -----------------------------
 # Main App
 # -----------------------------
@@ -194,42 +365,51 @@ all_audits = engine.list_audits()
 # -----------------------------
 # Sidebar menus with nested Checklist
 # -----------------------------
-checklist_department = None
+checklist_department: Optional[str] = None
 
 if role == "admin":
     page = st.sidebar.radio(
         "Admin Menu",
         ["Dashboard", "Auditors & Skills", "Create & Assign Audit", "Audit Plan", "Checklist", "Audit Details"],
-        key="admin_menu_radio"
+        key="admin_menu_radio",
     )
 
     if page == "Checklist":
         st.sidebar.markdown("**Checklist sub-menu**")
         checklist_department = st.sidebar.radio(
             "Department",
-            options=engine.load_departments_catalog(),
-            key="admin_checklist_dept_radio"
+            options=_get_checklist_catalog_depts() if _get_checklist_catalog_depts() else engine.load_departments_catalog(),
+            key="admin_checklist_dept_radio",
         )
 
 else:
     page = st.sidebar.radio(
         "Auditor Menu",
         ["My Audits", "My Timetable", "Checklist", "Audit Details"],
-        key="auditor_menu_radio"
+        key="auditor_menu_radio",
     )
 
     if page == "Checklist":
         st.sidebar.markdown("**Checklist sub-menu**")
+
+        # Only departments that THIS auditor is assigned to audit
         my_audits = [a for a in all_audits if a.get("assigned_auditor") == person_name]
-        my_depts = sorted({(a.get("audited_department") or "").strip() for a in my_audits if (a.get("audited_department") or "").strip()},
-                          key=lambda x: x.lower())
+        my_depts = sorted(
+            {
+                (a.get("audited_department") or "").strip()
+                for a in my_audits
+                if (a.get("audited_department") or "").strip()
+            },
+            key=lambda x: x.lower(),
+        )
+
         if not my_depts:
             checklist_department = None
         else:
             checklist_department = st.sidebar.radio(
                 "Department",
                 options=my_depts,
-                key="auditor_checklist_dept_radio"
+                key="auditor_checklist_dept_radio",
             )
 
 # -----------------------------
@@ -262,7 +442,9 @@ if role == "admin" and page == "Dashboard":
 
 elif role == "admin" and page == "Auditors & Skills":
     st.title("Auditors & Skills")
-    st.caption("Add auditors (name, dept, skills). New departments/skills added via 'Other' will appear in dropdowns next time.")
+    st.caption(
+        "Add auditors (name, dept, skills). New departments/skills added via 'Other' will appear in dropdowns next time."
+    )
 
     left, right = st.columns([1, 1])
 
@@ -282,7 +464,6 @@ elif role == "admin" and page == "Auditors & Skills":
 
             level = st.selectbox("Level", ["experienced", "fresher"])
 
-            # Skills with OTHER (persistent)
             selected_skill_keys = st.multiselect(
                 "Skills",
                 options=skill_keys + ["OTHER"],
@@ -565,6 +746,9 @@ elif role == "admin" and page == "Audit Plan":
                 else:
                     st.error(msg)
 
+# -----------------------------
+# Checklist pages
+# -----------------------------
 elif role == "admin" and page == "Checklist":
     st.title("Checklist (Admin)")
     st.caption("Create department-wise checklists with sections. Auditors will fill Observation and Evidence during audits.")
@@ -576,7 +760,6 @@ elif role == "admin" and page == "Checklist":
         st.stop()
 
     dept_for_checklist = checklist_department
-
     st.subheader(f"Department: {dept_for_checklist}")
 
     sections = engine.get_sections_for_department(dept_for_checklist)
@@ -619,17 +802,25 @@ elif role == "admin" and page == "Checklist":
             st.rerun()
 
     with cC:
-        st.info("Tip: Create sections like Resource Planning, Onboarding, Training Planning, etc.")
+        st.info("Tip: Create sections like General Requirements, Inputs, Outputs, etc.")
 
 elif role == "auditor" and page == "Checklist":
     st.title("Checklist (Auditor)")
-    st.caption("Pick your department from sidebar; then select the audit and section to fill Observation and Evidence.")
+    st.caption("You can edit checklist only for departments that you are assigned to audit.")
 
     import pandas as pd
 
     my_audits = [a for a in all_audits if a.get("assigned_auditor") == person_name]
+    my_depts = sorted(
+        {
+            (a.get("audited_department") or "").strip()
+            for a in my_audits
+            if (a.get("audited_department") or "").strip()
+        },
+        key=lambda x: x.lower(),
+    )
 
-    if not my_audits:
+    if not my_depts:
         st.info("No audits assigned to you yet.")
         st.stop()
 
@@ -638,74 +829,134 @@ elif role == "auditor" and page == "Checklist":
         st.stop()
 
     dept = checklist_department
-    dept_audits = [a for a in my_audits if (a.get("audited_department") or "").strip().lower() == dept.strip().lower()]
 
-    if not dept_audits:
-        st.info(f"No audits assigned to you for department: {dept}")
+    # Hard restriction: auditor can only edit/checklist for allowed depts
+    if dept.strip().lower() not in {d.strip().lower() for d in my_depts}:
+        st.error("Access denied. You can edit checklist only for departments you are assigned to audit.")
         st.stop()
 
-    audit_options = [
-        f'{a.get("audit_id")} | {a.get("title") or "-"} | Status: {a.get("status")}'
-        for a in dept_audits
-    ]
-    pick = st.selectbox("Select Audit", options=audit_options, key=f"aud_chk_pick_audit_{dept}")
-
-    audit_id = pick.split("|", 1)[0].strip()
-    audit = engine.get_audit(audit_id)
-
-    if not audit:
-        st.error("Audit not found.")
-        st.stop()
-
-    sections = engine.get_sections_for_department(dept)
-    if not sections:
-        st.info(f"No checklist sections found for department '{dept}'. Ask Admin to create them.")
-        st.stop()
-
-    section = st.selectbox("Select Checklist Section", options=sections, key=f"aud_chk_section_{audit_id}_{dept}")
-
-    saved_rows = engine.load_audit_section_table(audit_id, dept, section)
-    if saved_rows:
-        df = pd.DataFrame(saved_rows)
-        df = df.rename(columns={
-            "sr_no": "SR No",
-            "checklist": "Checklist",
-            "observation": "Observation",
-            "evidence": "Evidence",
-        })
-    else:
-        items = engine.get_items_for_department_section(dept, section)
-        df = pd.DataFrame({
-            "SR No": list(range(1, len(items) + 1)),
-            "Checklist": items,
-            "Observation": ["" for _ in items],
-            "Evidence": ["" for _ in items],
-        })
-
-    st.caption("Fill Observation and Evidence. SR No and Checklist are locked.")
-    edited = st.data_editor(
-        df,
-        use_container_width=True,
-        disabled=["SR No", "Checklist"],
-        key=f"aud_chk_editor_{audit_id}_{dept}_{section}",
+    mode = st.radio(
+        "What do you want to do?",
+        ["Fill Observation/Evidence for my audit", "Create/Edit checklist library"],
+        horizontal=True,
+        key=f"aud_chk_mode_{dept}",
     )
 
-    if st.button("Save Checklist Observations", type="primary", key=f"aud_chk_save_{audit_id}_{dept}_{section}"):
-        rows_to_save = []
-        for _, r in edited.iterrows():
-            rows_to_save.append({
-                "sr_no": str(r.get("SR No", "")).strip(),
-                "checklist": str(r.get("Checklist", "")).strip(),
-                "observation": str(r.get("Observation", "")).strip(),
-                "evidence": str(r.get("Evidence", "")).strip(),
-            })
-        ok, msg = engine.save_audit_section_table(audit_id, dept, section, rows_to_save)
-        if ok:
-            st.success(f"Saved: {dept} → {section}")
-            st.rerun()
-        else:
-            st.error(msg)
+    if mode == "Create/Edit checklist library":
+        st.subheader(f"Edit Checklist Library: {dept}")
 
+        sections = engine.get_sections_for_department(dept)
+        pick_section = st.selectbox("Section", ["(Create New)"] + sections, key=f"chk_aud_section_{dept}")
+
+        new_section = ""
+        if pick_section == "(Create New)":
+            new_section = st.text_input("New Section Name", key=f"chk_aud_new_section_{dept}").strip()
+
+        section_name = new_section if pick_section == "(Create New)" else pick_section
+
+        existing_items = engine.get_items_for_department_section(dept, section_name) if section_name else []
+        st.write("Edit checklist items below. One row = one checklist point.")
+
+        df_items = pd.DataFrame({"Checklist": existing_items if existing_items else [""]})
+        edited_df = st.data_editor(
+            df_items,
+            use_container_width=True,
+            num_rows="dynamic",
+            key=f"chk_aud_editor_{dept}_{section_name or 'blank'}",
+        )
+
+        c1, c2, c3 = st.columns([1, 1, 2])
+        with c1:
+            if st.button("Save Section Checklist", type="primary", key=f"chk_aud_save_{dept}"):
+                if not section_name:
+                    st.error("Please select an existing section or enter a new section name.")
+                else:
+                    cleaned = [str(x).strip() for x in edited_df["Checklist"].tolist() if str(x).strip()]
+                    engine.upsert_section_items(dept, section_name, cleaned)
+                    st.success(f"Saved checklist for: {dept} → {section_name}")
+                    st.rerun()
+
+        with c2:
+            if pick_section != "(Create New)" and st.button("Delete Section", key=f"chk_aud_delete_{dept}_{pick_section}"):
+                engine.delete_section(dept, pick_section)
+                st.success(f"Deleted section: {dept} → {pick_section}")
+                st.rerun()
+
+        with c3:
+            st.info("This is allowed only for your assigned audit departments.")
+
+    else:
+        dept_audits = [a for a in my_audits if (a.get("audited_department") or "").strip().lower() == dept.strip().lower()]
+
+        if not dept_audits:
+            st.info(f"No audits assigned to you for department: {dept}")
+            st.stop()
+
+        audit_options = [
+            f'{a.get("audit_id")} | {a.get("title") or "-"} | Status: {a.get("status")}'
+            for a in dept_audits
+        ]
+        pick = st.selectbox("Select Audit", options=audit_options, key=f"aud_chk_pick_audit_{dept}")
+
+        audit_id = pick.split("|", 1)[0].strip()
+        audit = engine.get_audit(audit_id)
+
+        if not audit:
+            st.error("Audit not found.")
+            st.stop()
+
+        sections = engine.get_sections_for_department(dept)
+        if not sections:
+            st.info(f"No checklist sections found for department '{dept}'. Create them in 'Create/Edit checklist library'.")
+            st.stop()
+
+        section = st.selectbox("Select Checklist Section", options=sections, key=f"aud_chk_section_{audit_id}_{dept}")
+
+        saved_rows = engine.load_audit_section_table(audit_id, dept, section)
+        if saved_rows:
+            df = pd.DataFrame(saved_rows)
+            df = df.rename(columns={
+                "sr_no": "SR No",
+                "checklist": "Checklist",
+                "observation": "Observation",
+                "evidence": "Evidence",
+            })
+        else:
+            items = engine.get_items_for_department_section(dept, section)
+            df = pd.DataFrame({
+                "SR No": list(range(1, len(items) + 1)),
+                "Checklist": items,
+                "Observation": ["" for _ in items],
+                "Evidence": ["" for _ in items],
+            })
+
+        st.caption("Fill Observation and Evidence. SR No and Checklist are locked.")
+        edited = st.data_editor(
+            df,
+            use_container_width=True,
+            disabled=["SR No", "Checklist"],
+            key=f"aud_chk_editor_{audit_id}_{dept}_{section}",
+        )
+
+        if st.button("Save Checklist Observations", type="primary", key=f"aud_chk_save_{audit_id}_{dept}_{section}"):
+            rows_to_save = []
+            for _, r in edited.iterrows():
+                rows_to_save.append({
+                    "sr_no": str(r.get("SR No", "")).strip(),
+                    "checklist": str(r.get("Checklist", "")).strip(),
+                    "observation": str(r.get("Observation", "")).strip(),
+                    "evidence": str(r.get("Evidence", "")).strip(),
+                })
+            ok, msg = engine.save_audit_section_table(audit_id, dept, section, rows_to_save)
+            if ok:
+                st.success(f"Saved: {dept} → {section}")
+                st.rerun()
+            else:
+                st.error(msg)
+
+# -----------------------------
+# Audit Details
+# -----------------------------
 elif (role == "admin" and page == "Audit Details") or (role == "auditor" and page == "Audit Details"):
     st.title("Audit Details")
 
@@ -740,78 +991,6 @@ elif (role == "admin" and page == "Audit Details") or (role == "auditor" and pag
     st.write("**Due:**", audit.get("due_date") or "-")
     st.write("**Report Submitted At:**", audit.get("report_submitted_at") or "-")
     st.write("**Closed At:**", audit.get("closed_at") or "-")
-
-    # -----------------------------
-    # Section-wise checklist (Admin view + Auditor fill)
-    # -----------------------------
-    st.divider()
-    st.subheader("Department Checklist (Section-wise)")
-
-    import pandas as pd
-
-    dept = audit.get("audited_department", "")
-    sections = engine.get_sections_for_department(dept)
-
-    if not sections:
-        if role == "admin":
-            st.info(
-                f"No checklist sections found for department '{dept}'. "
-                "Go to Admin Menu → Checklist to add sections and items."
-            )
-        else:
-            st.info(
-                f"No checklist sections found for department '{dept}'. "
-                "Ask Admin to add checklist sections and items."
-            )
-    else:
-        section = st.selectbox("Select Checklist Section", options=sections, key=f"sec_pick_{audit.get('audit_id')}")
-
-        saved_rows = engine.load_audit_section_table(audit.get("audit_id"), dept, section)
-
-        if saved_rows:
-            df = pd.DataFrame(saved_rows)
-            df = df.rename(columns={
-                "sr_no": "SR No",
-                "checklist": "Checklist",
-                "observation": "Observation",
-                "evidence": "Evidence",
-            })
-        else:
-            items = engine.get_items_for_department_section(dept, section)
-            df = pd.DataFrame({
-                "SR No": list(range(1, len(items) + 1)),
-                "Checklist": items,
-                "Observation": ["" for _ in items],
-                "Evidence": ["" for _ in items],
-            })
-
-        if role == "auditor":
-            st.caption("Fill Observation and Evidence. SR No and Checklist are locked.")
-            edited = st.data_editor(
-                df,
-                use_container_width=True,
-                disabled=["SR No", "Checklist"],
-                key=f"aud_chk_{audit.get('audit_id')}_{section}",
-            )
-
-            if st.button("Save Checklist Observations", type="primary", key=f"save_chk_{audit.get('audit_id')}_{section}"):
-                rows_to_save = []
-                for _, r in edited.iterrows():
-                    rows_to_save.append({
-                        "sr_no": str(r.get("SR No", "")).strip(),
-                        "checklist": str(r.get("Checklist", "")).strip(),
-                        "observation": str(r.get("Observation", "")).strip(),
-                        "evidence": str(r.get("Evidence", "")).strip(),
-                    })
-                ok, msg = engine.save_audit_section_table(audit.get("audit_id"), dept, section, rows_to_save)
-                if ok:
-                    st.success(f"Saved: {dept} → {section}")
-                    st.rerun()
-                else:
-                    st.error(msg)
-        else:
-            st.caption("Admin view (read-only). Auditors fill Observation and Evidence.")
-            st.dataframe(df, use_container_width=True, hide_index=True)
 
     st.subheader("Reports")
     reports = audit.get("reports", [])

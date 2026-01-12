@@ -42,6 +42,22 @@
       "Is training effectiveness evaluated upon completion?",
       "Is evaluation documented appropriately?",
       "Are appropriate evaluation methods selected?"
+    ],
+    "Onboarding": [
+      "Is an onboarding plan available for new joiners?",
+      "Are onboarding records maintained (induction, training schedule, acknowledgements)?"
+    ],
+    "Training Execution & Records": [
+      "Are training records maintained (attendance, trainer, topic, date)?",
+      "Are trainees assessed where applicable (quiz, observation, supervision sign-off)?"
+    ],
+    "Training Effectiveness": [
+      "Is training effectiveness evaluated and documented?",
+      "Are re-trainings or corrective actions initiated if effectiveness is not met?"
+    ],
+    "Regulatory & QMS Awareness": [
+      "Are personnel aware of applicable regulatory/QMS requirements relevant to their roles?",
+      "Is awareness training conducted for changes to procedures or regulations?"
     ]
   },
   "MR": {
@@ -79,7 +95,8 @@
     ],
     "Follow-up & Records": [
       "Is the effectiveness of previous actions reviewed in subsequent MRMs?",
-      "Are management review minutes legible, dated, and approved?"
+      "Are management review minutes legible, dated, and approved?",
+      "None"
     ]
   },
   "Purchase": {
@@ -113,6 +130,89 @@
       "Are inspection outcomes (acceptance/rejection/deviation/concession) linked to the supplier?",
       "Are non-conforming items recorded",
       "Are inspection results used for supplier performance monitoring"
+    ],
+    "Supplier Performance Evaluation": [
+      "Is supplier performance evaluated based on defined parameters?",
+      "Are suppliers classified according to defined rating scale?",
+      "Are suppliers evaluated as per defined time period?",
+      "Are supplier audits conducted when required?",
+      "Is SCAR issued to the suppliers when required?",
+      "Are supplier ratings reviewed in Management Review Meetings?"
+    ],
+    "Supplier Re-evaluation": [
+      "Is re-evaluation initiated based on performance monitoring results?",
+      "Are re-evaluation outcomes documented?"
+    ]
+  },
+  "Management Review": {
+    "General Requirements": [
+      "Does top management conduct management reviews at planned intervals?",
+      "Is MRM plan documented?",
+      "Is the management review procedure defined and implemented?",
+      "Are management review records maintained?",
+      "Is MRM notice sent, acknowledged by respective personnel, and documented?",
+      "Is the MRM attendance documented?"
+    ],
+    "Management Review Inputs": [
+      "Results of internal and external audits reviewed and documented",
+      "Customer feedback (including complaints) reviewed and documented",
+      "Process performance and product conformity reviewed and documented",
+      "Status of preventive and corrective actions reviewed and documented",
+      "Follow-up actions from previous management reviews reviewed and documented",
+      "Changes that could affect the QMS (regulatory, organizational, product-related) reviewed and documented",
+      "Recommendations for improvement reviewed and documented",
+      "New or revised regulatory requirements applicable to medical devices reviewed and documented",
+      "Resource needs (human, infrastructure, work environment) reviewed and documented"
+    ],
+    "Conduct of Management Review": [
+      "Is the management review chaired or attended by top management?",
+      "Are relevant process owners involved as required?",
+      "Are discussions aligned with the planned agenda?"
+    ],
+    "Management Review Outputs": [
+      "Decisions/actions documented for improvement of the effectiveness of the QMS",
+      "Decisions/actions documented for improvement of product-related processes",
+      "Decisions/actions documented for improvement of medical device safety and performance",
+      "Resource requirements documented",
+      "Actions addressing identified risks documented",
+      "Responsibilities and timelines assigned for actions"
+    ],
+    "Follow-up & Records": [
+      "Is the effectiveness of previous actions reviewed in subsequent MRMs?",
+      "Are management review minutes legible, dated, and approved?"
+    ]
+  },
+  "Purchase and Supplier": {
+    "Supplier Selection": [
+      "Is supplier selection initiated when a new material, component, or service is required?",
+      "Does the Purchase Department identify potential suppliers?",
+      "Are supplier identification sources documented?",
+      "Are suppliers evaluated based on defined selection criteria?",
+      "Are suppliers categorized based on risk-based approach?"
+    ],
+    "Supplier Evaluation & Approval": [
+      "Is Supplier Assessment completed for potential suppliers?",
+      "Is the completed assessment reviewed?",
+      "Are suppliers evaluated and scored as per defined criteria?",
+      "Are approved suppliers included in Approved Supplier List?",
+      "For critical suppliers, is Supplier Quality Agreement executed before approval?"
+    ],
+    "Control of Outsourced Processes": [
+      "Are outsourced processes assigned only to approved suppliers?",
+      "Is verification of certificates and reports from outsourced activities carried out?"
+    ],
+    "Purchase Order Control": [
+      "Is supplier verification against the Approved Supplier List performed before PO issuance?",
+      "Is Supplier Selection & Evaluation initiated if the supplier is not approved?",
+      "Are POs reviewed and approved by authorized personnel?",
+      "Are PO records maintained?"
+    ],
+    "Verification of Purchased Product": [
+      "Is Incoming Inspection conducted as per approved procedure or specifications?",
+      "Are inspection results documented?",
+      "Are inspection outcomes (acceptance/rejection/deviation/concession) linked to the supplier?",
+      "Are non-conforming items recorded?",
+      "Are inspection results used for supplier performance monitoring?"
     ],
     "Supplier Performance Evaluation": [
       "Is supplier performance evaluated based on defined parameters?",
