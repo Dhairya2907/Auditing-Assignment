@@ -173,5 +173,27 @@
       "hr_competency_training_requirements"
     ],
     "level": "experienced"
+  },
+  {
+    "name": "Hemant Parmar",
+    "department": "HR",
+    "skills": [
+      "custom_54094c08a4",
+      "custom_59738d4264",
+      "custom_786cb63a66",
+      "custom_7fc57d367f",
+      "custom_91e25d6004",
+      "custom_e7fdc00aff",
+      "hr_competency_training_requirements",
+      "hr_personnel_regulatory_awareness",
+      "hr_review_training_records_effectiveness",
+      "pur_incoming_inspection_linkage",
+      "pur_supplier_agreements_quality_clauses",
+      "pur_supplier_selection_evaluation",
+      "sm_complaint_intake_escalation",
+      "sm_customer_communication_feedback",
+      "sm_labeling_claims_control"
+    ],
+    "level": "experienced"
   }
 ]

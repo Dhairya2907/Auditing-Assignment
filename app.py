@@ -7,6 +7,7 @@ import json
 
 import engine
 import timetable  # timetable.py must be in same folder
+import report_generator  # NEW: final PDF report generation
 
 st.set_page_config(
     page_title="Audit Assignment System",
@@ -25,11 +26,13 @@ CHECKLIST_CANDIDATE_FILES = [
     "checklists_catalog.json",
 ]
 
+
 def _find_checklist_catalog_file() -> str:
     for fn in CHECKLIST_CANDIDATE_FILES:
         if os.path.exists(fn):
             return fn
     return CHECKLIST_CANDIDATE_FILES[0]
+
 
 def _load_json_file(path: str, default):
     try:
@@ -40,14 +43,17 @@ def _load_json_file(path: str, default):
     except Exception:
         return default
 
+
 def _save_json_file(path: str, obj) -> None:
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(obj, f, indent=2, ensure_ascii=False)
     os.replace(tmp, path)
 
+
 def _ensure_dict(d) -> dict:
     return d if isinstance(d, dict) else {}
+
 
 def ensure_checklist_seed_data():
     """
@@ -179,12 +185,17 @@ def ensure_checklist_seed_data():
             catalog[dept] = {}
             changed = True
         for sec, items in sections.items():
-            if sec not in catalog[dept] or not isinstance(catalog[dept].get(sec), list) or len(catalog[dept].get(sec, [])) == 0:
+            if (
+                sec not in catalog[dept]
+                or not isinstance(catalog[dept].get(sec), list)
+                or len(catalog[dept].get(sec, [])) == 0
+            ):
                 catalog[dept][sec] = items
                 changed = True
 
     if changed:
         _save_json_file(path, catalog)
+
 
 ensure_checklist_seed_data()
 
@@ -199,6 +210,7 @@ if "auth" not in st.session_state:
         "person_name": None,
     }
 
+
 def logout():
     st.session_state.auth = {
         "logged_in": False,
@@ -208,9 +220,11 @@ def logout():
     }
     st.rerun()
 
+
 def require_login():
     if not st.session_state.auth["logged_in"]:
         st.stop()
+
 
 def audits_table(audits: List[Dict]):
     if not audits:
@@ -233,12 +247,14 @@ def audits_table(audits: List[Dict]):
         )
     st.dataframe(rows, use_container_width=True, hide_index=True)
 
+
 # -----------------------------
 # Timetable reminder helpers
 # -----------------------------
 def _parse_slot_start_end(slot_str: str):
     start_s, end_s = slot_str.split("-", 1)
     return start_s.strip(), end_s.strip()
+
 
 def show_auditor_timetable_reminder(auditor_name: str, remind_within_minutes: int = 30):
     try:
@@ -269,8 +285,14 @@ def show_auditor_timetable_reminder(auditor_name: str, remind_within_minutes: in
         dept = item["department"]
         try:
             start_s, end_s = _parse_slot_start_end(slot)
-            start_dt = datetime.combine(date.fromisoformat(today), datetime.strptime(start_s, "%H:%M").time())
-            end_dt = datetime.combine(date.fromisoformat(today), datetime.strptime(end_s, "%H:%M").time())
+            start_dt = datetime.combine(
+                date.fromisoformat(today),
+                datetime.strptime(start_s, "%H:%M").time(),
+            )
+            end_dt = datetime.combine(
+                date.fromisoformat(today),
+                datetime.strptime(end_s, "%H:%M").time(),
+            )
             if tz:
                 start_dt = start_dt.replace(tzinfo=tz)
                 end_dt = end_dt.replace(tzinfo=tz)
@@ -295,19 +317,70 @@ def show_auditor_timetable_reminder(auditor_name: str, remind_within_minutes: in
         if mins <= remind_within_minutes:
             st.info(f"🔔 You have an audit in **{mins} min** at **{slot.split('-')[0]}** for **{dept}**.")
 
+
 # -----------------------------
 # Helpers: persistent dropdown options
 # -----------------------------
 def get_department_options_with_other() -> List[str]:
     return engine.load_departments_catalog() + ["Other"]
 
+
 def get_skill_catalog() -> Dict[str, str]:
     return engine.load_skills_catalog()
+
 
 def _get_checklist_catalog_depts() -> List[str]:
     path = _find_checklist_catalog_file()
     catalog = _ensure_dict(_load_json_file(path, {}))
     return sorted([k for k in catalog.keys() if str(k).strip()], key=lambda x: str(x).lower())
+
+
+# -----------------------------
+# Audit dropdown labels (Title-first) for UI
+# -----------------------------
+def build_audit_dropdown(
+    audits: List[Dict],
+    *,
+    restrict_to_auditor: bool,
+    auditor_name: Optional[str],
+) -> tuple[list[str], dict[str, str]]:
+    visible = audits
+    if restrict_to_auditor and auditor_name:
+        visible = [a for a in audits if a.get("assigned_auditor") == auditor_name]
+
+    labels: list[str] = []
+    label_to_id: dict[str, str] = {}
+
+    for a in visible:
+        aid = (a.get("audit_id") or "").strip()
+        if not aid:
+            continue
+
+        title = (a.get("title") or "").strip()
+        dept = (a.get("audited_department") or "").strip()
+        status = (a.get("status") or "").strip()
+
+        base = title if title else f"{dept or 'Audit'} | {aid[:8]}"
+        extras = []
+        if dept:
+            extras.append(dept)
+        if status:
+            extras.append(status)
+
+        label = f"{base}  ({' | '.join(extras)})" if extras else base
+
+        uniq = label
+        n = 2
+        while uniq in label_to_id:
+            uniq = f"{label} [{n}]"
+            n += 1
+
+        labels.append(uniq)
+        label_to_id[uniq] = aid
+
+    labels = sorted(labels, key=lambda x: x.lower())
+    return labels, label_to_id
+
 
 # -----------------------------
 # Login UI
@@ -370,7 +443,7 @@ checklist_department: Optional[str] = None
 if role == "admin":
     page = st.sidebar.radio(
         "Admin Menu",
-        ["Dashboard", "Auditors & Skills", "Create & Assign Audit", "Audit Plan", "Checklist", "Audit Details"],
+        ["Dashboard", "Auditors & Skills", "Create & Assign Audit", "Audit Plan", "Checklist", "Audit Details", "Reports"],
         key="admin_menu_radio",
     )
 
@@ -385,14 +458,13 @@ if role == "admin":
 else:
     page = st.sidebar.radio(
         "Auditor Menu",
-        ["My Audits", "My Timetable", "Checklist", "Audit Details"],
+        ["My Audits", "My Timetable", "Checklist", "Audit Details", "Reports"],
         key="auditor_menu_radio",
     )
 
     if page == "Checklist":
         st.sidebar.markdown("**Checklist sub-menu**")
 
-        # Only departments that THIS auditor is assigned to audit
         my_audits = [a for a in all_audits if a.get("assigned_auditor") == person_name]
         my_depts = sorted(
             {
@@ -612,7 +684,9 @@ elif role == "admin" and page == "Create & Assign Audit":
                 title=title,
                 scope=scope,
                 due_date=due_date,
-                required_skill_keys_override=required_override if required_override is not None and len(required_override) > 0 else None,
+                required_skill_keys_override=required_override
+                if required_override is not None and len(required_override) > 0
+                else None,
                 save_required_skills_as_default=save_as_default,
             )
             if not audit:
@@ -830,7 +904,6 @@ elif role == "auditor" and page == "Checklist":
 
     dept = checklist_department
 
-    # Hard restriction: auditor can only edit/checklist for allowed depts
     if dept.strip().lower() not in {d.strip().lower() for d in my_depts}:
         st.error("Access denied. You can edit checklist only for departments you are assigned to audit.")
         st.stop()
@@ -886,19 +959,27 @@ elif role == "auditor" and page == "Checklist":
             st.info("This is allowed only for your assigned audit departments.")
 
     else:
-        dept_audits = [a for a in my_audits if (a.get("audited_department") or "").strip().lower() == dept.strip().lower()]
+        dept_audits = [
+            a for a in my_audits
+            if (a.get("audited_department") or "").strip().lower() == dept.strip().lower()
+        ]
 
         if not dept_audits:
             st.info(f"No audits assigned to you for department: {dept}")
             st.stop()
 
-        audit_options = [
-            f'{a.get("audit_id")} | {a.get("title") or "-"} | Status: {a.get("status")}'
-            for a in dept_audits
-        ]
-        pick = st.selectbox("Select Audit", options=audit_options, key=f"aud_chk_pick_audit_{dept}")
+        labels, label_to_id = build_audit_dropdown(
+            dept_audits,
+            restrict_to_auditor=False,
+            auditor_name=None,
+        )
 
-        audit_id = pick.split("|", 1)[0].strip()
+        if not labels:
+            st.info("No audits available.")
+            st.stop()
+
+        selected_label = st.selectbox("Select Audit", options=labels, key=f"aud_chk_pick_audit_{dept}")
+        audit_id = label_to_id[selected_label]
         audit = engine.get_audit(audit_id)
 
         if not audit:
@@ -960,8 +1041,18 @@ elif role == "auditor" and page == "Checklist":
 elif (role == "admin" and page == "Audit Details") or (role == "auditor" and page == "Audit Details"):
     st.title("Audit Details")
 
-    audit_ids = [a.get("audit_id") for a in all_audits]
-    selected_id = st.selectbox("Select Audit ID", options=audit_ids)
+    labels, label_to_id = build_audit_dropdown(
+        all_audits,
+        restrict_to_auditor=(role == "auditor"),
+        auditor_name=person_name,
+    )
+
+    if not labels:
+        st.warning("No audits available.")
+        st.stop()
+
+    selected_label = st.selectbox("Select Audit", options=labels, key="audit_details_select")
+    selected_id = label_to_id[selected_label]
 
     audit = engine.get_audit(selected_id) if selected_id else None
     if not audit:
@@ -1065,6 +1156,152 @@ elif (role == "admin" and page == "Audit Details") or (role == "auditor" and pag
                 st.rerun()
             else:
                 st.error(msg)
+
+# -----------------------------
+# Reports (Admin generates; everyone can download; admin can delete)
+# -----------------------------
+elif page == "Reports":
+    st.title("Final Reports (PDF)")
+
+    if role == "admin":
+        st.subheader("Generate final report PDF")
+        st.caption("Select audits, write summary per audit, then generate a single PDF. Only Admin can generate/delete.")
+
+        statuses = st.multiselect(
+            "Include audits by status",
+            ["Assigned", "In Progress", "Report Submitted", "Closed"],
+            default=["Closed"],
+            key="rep_statuses",
+        )
+
+        # Which audits match statuses
+        statuses_lower = {s.strip().lower() for s in statuses if str(s).strip()}
+        selectable_audits = [a for a in all_audits if str(a.get("status", "")).strip().lower() in statuses_lower]
+
+        if not selectable_audits:
+            st.info("No audits available for the selected statuses.")
+        else:
+            labels, label_to_id = build_audit_dropdown(
+                selectable_audits,
+                restrict_to_auditor=False,
+                auditor_name=None,
+            )
+
+            chosen_labels = st.multiselect(
+                "Select audits to include in the final PDF",
+                options=labels,
+                default=labels,
+                key="rep_pick_audits",
+            )
+            chosen_ids = [label_to_id[l] for l in chosen_labels if l in label_to_id]
+            chosen_audits = [engine.get_audit(aid) for aid in chosen_ids]
+            chosen_audits = [a for a in chosen_audits if a]
+
+            st.divider()
+            st.subheader("Admin Summary (required for each audit)")
+
+            admin_summaries: Dict[str, str] = {}
+            missing = 0
+
+            for a in chosen_audits:
+                aid = a.get("audit_id")
+                title = (a.get("title") or "Untitled").strip()
+                dept = (a.get("audited_department") or "-").strip()
+                auditor = (a.get("assigned_auditor") or "-").strip()
+
+                st.markdown(f"**{title}**  \nDept: {dept}  \nAuditor: {auditor}")
+                txt = st.text_area(
+                    f"Summary for audit: {title}",
+                    value="",
+                    height=110,
+                    key=f"rep_sum_{aid}",
+                ).strip()
+
+                if not txt:
+                    missing += 1
+                admin_summaries[str(aid)] = txt
+                st.divider()
+
+            filename = st.text_input(
+                "Output filename (optional)",
+                placeholder="Final_Audit_Report_<auto>.pdf",
+                key="rep_filename",
+            ).strip() or None
+
+            if st.button("Generate PDF Report", type="primary", key="rep_generate_btn"):
+                if not chosen_audits:
+                    st.error("Please select at least one audit.")
+                elif missing > 0:
+                    st.error(f"Please fill admin summary for all selected audits. Missing: {missing}")
+                else:
+                    ok, msg, pdf_path = report_generator.generate_final_audit_report_pdf(
+                        generated_by=username,
+                        admin_summaries_by_audit_id=admin_summaries,
+                        include_statuses=statuses,
+                        output_filename=filename,
+                    )
+                    if ok and pdf_path:
+                        st.success(msg)
+                        try:
+                            with open(pdf_path, "rb") as f:
+                                st.download_button(
+                                    "Download generated PDF",
+                                    data=f.read(),
+                                    file_name=os.path.basename(pdf_path),
+                                    mime="application/pdf",
+                                    key=f"rep_dl_now_{os.path.basename(pdf_path)}",
+                                )
+                        except Exception:
+                            st.warning("Generated file exists but could not be opened for download.")
+                        st.rerun()
+                    else:
+                        st.error(msg)
+
+        st.divider()
+
+    st.subheader("Generated Reports")
+    reports = report_generator.list_generated_reports()
+
+    if not reports:
+        st.info("No reports generated yet.")
+    else:
+        for r in reversed(reports):
+            file_name = r.get("file_name")
+            file_path = r.get("file_path")
+            report_id = r.get("report_id")
+
+            st.write(
+                f"📄 **{file_name}**  \n"
+                f"Generated at: {r.get('generated_at')}  \n"
+                f"Generated by: {r.get('generated_by')}"
+            )
+
+            c1, c2 = st.columns([1, 1])
+
+            with c1:
+                try:
+                    with open(file_path, "rb") as f:
+                        st.download_button(
+                            label="Download PDF",
+                            data=f.read(),
+                            file_name=file_name,
+                            mime="application/pdf",
+                            key=f"dl_report_{report_id}",
+                        )
+                except Exception:
+                    st.warning("File not available on server.")
+
+            with c2:
+                if role == "admin":
+                    if st.button("Delete Report", key=f"del_report_{report_id}"):
+                        ok, msg = report_generator.delete_generated_report(str(report_id))
+                        if ok:
+                            st.success(msg)
+                            st.rerun()
+                        else:
+                            st.error(msg)
+
+            st.divider()
 
 # -----------------------------
 # Auditor Pages

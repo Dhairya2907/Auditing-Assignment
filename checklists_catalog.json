@@ -80,11 +80,6 @@
       "New or revised regulatory requirements applicable to medical devices",
       "Resource needs (human, infrastructure, work environment)"
     ],
-    "Conduct of Management Review": [
-      "Is the management review chaired or attended by top management?",
-      "Are relevant process owners involved as required?",
-      "Are discussions aligned with the planned agenda?"
-    ],
     "Management Review Outputs": [
       "Improvement of the effectiveness of the QMS",
       "Improvement of product-related processes",
@@ -92,11 +87,6 @@
       "Resource requirements",
       "Actions addressing identified risks",
       "Responsibilities and timelines assigned for actions"
-    ],
-    "Follow-up & Records": [
-      "Is the effectiveness of previous actions reviewed in subsequent MRMs?",
-      "Are management review minutes legible, dated, and approved?",
-      "None"
     ]
   },
   "Purchase": {

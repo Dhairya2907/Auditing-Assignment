@@ -1008,3 +1008,186 @@ def delete_auditor(name: str) -> Tuple[bool, str]:
     save_json(USERS_FILE, users_data)
 
     return True, "Auditor deleted successfully (people.json and users.json updated)."
+
+# -----------------------------
+# NEW FEATURE: Supabase/Postgres authentication (optional)
+# Does NOT change existing JSON-based auth.
+# -----------------------------
+def _verify_password_columns(password: str, salt_hex: str, iterations: int, hash_hex: str) -> bool:
+    """
+    Verify password when stored in DB as 3 columns:
+    password_salt (hex), password_iterations (int), password_hash (hex)
+    """
+    if not salt_hex or not hash_hex:
+        return False
+    try:
+        iterations = int(iterations)
+    except Exception:
+        return False
+
+    got = _pbkdf2_hash(password, salt_hex, iterations)
+    return hmac.compare_digest(got, hash_hex)
+
+
+def authenticate_db(tenant_code: str, username: str, password: str) -> Tuple[bool, Optional[Dict], str]:
+    """
+    Authenticate against Supabase Postgres.
+
+    Required ENV variable:
+      DATABASE_URL = your Postgres connection string
+
+    Returns:
+      (ok, user_dict, message)
+    where user_dict contains: id, tenant_id, username, role, person_name
+    """
+    import os
+
+    db_url = os.getenv("DATABASE_URL", "").strip()
+    if not db_url:
+        return False, None, "DATABASE_URL is not set in environment variables."
+
+    tenant_code = _normalize_text(tenant_code).lower()
+    username = _normalize_text(username).lower()
+
+    if not tenant_code or not username or not password:
+        return False, None, "Tenant code, username, and password are required."
+
+    # Lazy import so your app still runs even if psycopg is not installed yet.
+    try:
+        import psycopg2
+        import psycopg2.extras
+    except Exception:
+        return False, None, "Missing dependency: install psycopg2-binary."
+
+    sql = """
+    select
+      u.id,
+      u.tenant_id,
+      u.username,
+      u.role,
+      u.person_name,
+      u.password_salt,
+      u.password_iterations,
+      u.password_hash
+    from users u
+    join tenants t on t.id = u.tenant_id
+    where t.tenant_code = %s
+      and lower(u.username) = %s
+    limit 1;
+    """
+
+    try:
+        conn = psycopg2.connect(db_url)
+        try:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(sql, (tenant_code, username))
+                row = cur.fetchone()
+        finally:
+            conn.close()
+    except Exception as e:
+        return False, None, f"DB connection/query failed: {e}"
+
+    if not row:
+        return False, None, "Invalid username or password."
+
+    ok = _verify_password_columns(
+        password=password,
+        salt_hex=row.get("password_salt"),
+        iterations=row.get("password_iterations"),
+        hash_hex=row.get("password_hash"),
+    )
+    if not ok:
+        return False, None, "Invalid username or password."
+
+    user = {
+        "id": str(row.get("id")),
+        "tenant_id": str(row.get("tenant_id")),
+        "username": row.get("username"),
+        "role": row.get("role"),
+        "person_name": row.get("person_name"),
+    }
+    return True, user, "Login successful (DB)."
+
+# -----------------------------
+# UI helper: show Audit Title instead of Audit ID (non-breaking, add-only)
+# Keeps using audit_id internally for traceability
+# -----------------------------
+
+def _build_audit_display_title(a: Dict[str, Any]) -> str:
+    """
+    Returns a human-readable label for UI dropdowns.
+
+    Priority:
+    1) a["title"] if present
+    2) a["audit_title"] (backward/alternate key if ever used)
+    3) fallback: "<department> | <audit_id_prefix>"
+    """
+    title = _normalize_text(a.get("title", ""))
+    if not title:
+        title = _normalize_text(a.get("audit_title", ""))
+
+    dept = _normalize_text(a.get("audited_department", ""))
+    status = _normalize_text(a.get("status", ""))
+    due = _normalize_text(a.get("due_date", ""))
+    auditor = _normalize_text(a.get("assigned_auditor", ""))
+
+    # Base label
+    if title:
+        label = title
+    else:
+        aid = str(a.get("audit_id", "") or "")
+        prefix = aid[:8] if aid else "unknown"
+        label = f"{dept or 'Audit'} | {prefix}"
+
+    # Enrich label slightly (still compact)
+    extras: List[str] = []
+    if dept and (dept.lower() not in label.lower()):
+        extras.append(dept)
+    if status:
+        extras.append(status)
+    if due:
+        extras.append(f"Due: {due}")
+    if auditor:
+        extras.append(f"Auditor: {auditor}")
+
+    if extras:
+        return f"{label}  ({' | '.join(extras)})"
+    return label
+
+
+def get_audit_dropdown_options() -> Tuple[List[str], Dict[str, str]]:
+    """
+    Returns:
+      labels: list of labels to show in UI
+      label_to_id: mapping label -> audit_id
+
+    This is safe even if some audits have blank titles.
+    Ensures labels are unique (adds suffix when duplicates occur).
+    """
+    audits = list_audits()
+
+    labels: List[str] = []
+    label_to_id: Dict[str, str] = {}
+    seen: Dict[str, int] = {}
+
+    for a in audits:
+        audit_id = str(a.get("audit_id", "") or "").strip()
+        if not audit_id:
+            continue
+
+        base = _build_audit_display_title(a)
+        key = base
+
+        # Ensure uniqueness in dropdown
+        if key in seen:
+            seen[key] += 1
+            key = f"{base} [{seen[base]}]"
+        else:
+            seen[base] = 1
+
+        labels.append(key)
+        label_to_id[key] = audit_id
+
+    # Sort labels nicely
+    labels.sort(key=lambda x: x.lower())
+    return labels, label_to_id

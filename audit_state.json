@@ -43,6 +43,30 @@
       "level": "experienced",
       "started_at": "2026-01-12T10:53:11",
       "status": "ongoing"
+    },
+    "Devarsh Patel": {
+      "audit_id": "eb573680-0d6d-45c2-ae89-2aac0ccb0280",
+      "audited_department": "HR",
+      "required_skills": [
+        "hr_competency_training_requirements",
+        "hr_personnel_regulatory_awareness",
+        "hr_review_training_records_effectiveness"
+      ],
+      "level": "experienced",
+      "started_at": "2026-01-15T11:20:40",
+      "status": "ongoing"
+    },
+    "Hemant Parmar": {
+      "audit_id": "470bfd82-e083-4421-b569-0ee33552ee38",
+      "audited_department": "Toxicologist",
+      "required_skills": [
+        "custom_54094c08a4",
+        "custom_786cb63a66",
+        "custom_91e25d6004"
+      ],
+      "level": "experienced",
+      "started_at": "2026-01-16T10:36:13",
+      "status": "ongoing"
     }
   },
   "audit_history": [

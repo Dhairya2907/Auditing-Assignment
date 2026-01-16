@@ -283,6 +283,48 @@
       "report_submitted_at": "",
       "closed_at": "",
       "checklists": {}
+    },
+    {
+      "audit_id": "eb573680-0d6d-45c2-ae89-2aac0ccb0280",
+      "title": "uttrayan 15",
+      "scope": "",
+      "audited_department": "HR",
+      "required_skills": [
+        "hr_competency_training_requirements",
+        "hr_personnel_regulatory_awareness",
+        "hr_review_training_records_effectiveness"
+      ],
+      "assigned_auditor": "Devarsh Patel",
+      "auditor_level": "experienced",
+      "status": "Assigned",
+      "created_by": "admin",
+      "created_at": "2026-01-15T11:20:40",
+      "due_date": "",
+      "reports": [],
+      "report_submitted_at": "",
+      "closed_at": "",
+      "checklists": {}
+    },
+    {
+      "audit_id": "470bfd82-e083-4421-b569-0ee33552ee38",
+      "title": "Toxicologist  Specialization",
+      "scope": "",
+      "audited_department": "Toxicologist",
+      "required_skills": [
+        "custom_54094c08a4",
+        "custom_786cb63a66",
+        "custom_91e25d6004"
+      ],
+      "assigned_auditor": "Hemant Parmar",
+      "auditor_level": "experienced",
+      "status": "Assigned",
+      "created_by": "admin",
+      "created_at": "2026-01-16T10:36:13",
+      "due_date": "",
+      "reports": [],
+      "report_submitted_at": "",
+      "closed_at": "",
+      "checklists": {}
     }
   ]
 }
