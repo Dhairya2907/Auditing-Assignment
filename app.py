@@ -7,21 +7,272 @@ import json
 
 import engine
 import timetable  # timetable.py must be in same folder
-import report_generator  # NEW: final PDF report generation
+import report_generator  # final PDF report generation
 
+# ============================================================
+# ENTERPRISE (high-authority) UI THEME + COMPONENTS
+# ============================================================
+def inject_enterprise_css():
+    st.markdown(
+        """
+        <style>
+        /* ============ Enterprise Authority Theme ============ */
+
+        /* Page background */
+        .stApp {
+            background: #f6f8fb;
+            color: #0f172a;
+        }
+
+        /* Main container spacing */
+        .block-container {
+            padding-top: 1.25rem;
+            padding-bottom: 2.25rem;
+            max-width: 1250px;
+        }
+
+        /* Sidebar */
+        section[data-testid="stSidebar"] {
+            background: #ffffff;
+            border-right: 1px solid #e5e7eb;
+        }
+
+        /* Typography */
+        h1, h2, h3, h4 {
+            color: #0f172a;
+            letter-spacing: 0.2px;
+        }
+        .subtle {
+            color: #475569;
+            font-size: 13px;
+        }
+
+        /* Header bar container */
+        .topbar {
+            background: #ffffff;
+            border: 1px solid #e5e7eb;
+            border-radius: 14px;
+            padding: 14px 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 8px 18px rgba(15, 23, 42, 0.06);
+            margin-bottom: 14px;
+        }
+        .brand {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .brand .title {
+            font-size: 16px;
+            font-weight: 900;
+            color: #0f172a;
+        }
+        .brand .tagline {
+            font-size: 12px;
+            color: #64748b;
+        }
+
+        /* Role chip */
+        .chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 7px 10px;
+            border-radius: 999px;
+            border: 1px solid #e5e7eb;
+            background: #f8fafc;
+            color: #0f172a;
+            font-size: 12px;
+            font-weight: 800;
+            white-space: nowrap;
+        }
+        .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 999px;
+            background: #1e3a8a;
+        }
+
+        /* Panels */
+        .panel {
+            background: #ffffff;
+            border: 1px solid #e5e7eb;
+            border-radius: 14px;
+            padding: 14px 14px;
+            box-shadow: 0 8px 18px rgba(15, 23, 42, 0.05);
+        }
+        .panel-title {
+            font-weight: 900;
+            font-size: 14px;
+            margin-bottom: 6px;
+            color: #0f172a;
+        }
+        .panel-subtitle {
+            font-size: 12px;
+            color: #64748b;
+            margin-bottom: 0px;
+        }
+
+        /* KPI tiles */
+        .kpi-row {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+            margin-bottom: 10px;
+        }
+        .kpi {
+            background: #ffffff;
+            border: 1px solid #e5e7eb;
+            border-radius: 14px;
+            padding: 12px 12px;
+            box-shadow: 0 8px 18px rgba(15, 23, 42, 0.05);
+        }
+        .kpi .label { font-size: 12px; color: #64748b; font-weight: 900; }
+        .kpi .value { font-size: 22px; color: #0f172a; font-weight: 950; margin-top: 4px; }
+        .kpi .meta  { font-size: 12px; color: #475569; margin-top: 4px; }
+
+        /* Buttons (primary enterprise navy) */
+        .stButton button {
+            background: #1e3a8a !important;
+            color: #ffffff !important;
+            border: 1px solid #1e3a8a !important;
+            border-radius: 10px !important;
+            font-weight: 900 !important;
+            padding: 0.55rem 0.95rem !important;
+        }
+        .stButton button:hover { background: #1d4ed8 !important; border-color: #1d4ed8 !important; }
+
+        /* Inputs */
+        .stTextInput input, .stSelectbox div, .stMultiSelect div, .stTextArea textarea, .stDateInput input {
+            border-radius: 10px !important;
+        }
+
+        /* Dataframe */
+        div[data-testid="stDataFrame"] {
+            border: 1px solid #e5e7eb;
+            border-radius: 14px;
+            overflow: hidden;
+        }
+
+        /* Hide Streamlit footer */
+        footer { visibility: hidden; }
+
+        /* Responsive KPI row */
+        @media (max-width: 1100px) {
+            .kpi-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
+        @media (max-width: 650px) {
+            .kpi-row { grid-template-columns: repeat(1, minmax(0, 1fr)); }
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_topbar(username: str, role: str):
+    st.markdown(
+        f"""
+        <div class="topbar">
+            <div class="brand">
+                <div class="title">Audit Assignment System</div>
+                <div class="tagline">Controlled scheduling, skill matching, checklists, reports, and closure control</div>
+            </div>
+            <div class="chip"><span class="dot"></span>{role.upper()} • {username}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_panel(title: str, subtitle: str = ""):
+    st.markdown(
+        f"""
+        <div class="panel">
+            <div class="panel-title">{title}</div>
+            <div class="panel-subtitle">{subtitle}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_kpi(label: str, value: str, meta: str = ""):
+    st.markdown(
+        f"""
+        <div class="kpi">
+            <div class="label">{label}</div>
+            <div class="value">{value}</div>
+            <div class="meta">{meta}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def status_chip(status: str) -> str:
+    s = (status or "").strip().lower()
+    if s == "closed":
+        bg, fg, bd = "#ecfdf5", "#065f46", "#a7f3d0"
+        label = "Closed"
+    elif "report" in s:
+        bg, fg, bd = "#eff6ff", "#1e3a8a", "#bfdbfe"
+        label = "Report Submitted"
+    elif "progress" in s:
+        bg, fg, bd = "#fff7ed", "#9a3412", "#fed7aa"
+        label = "In Progress"
+    else:
+        bg, fg, bd = "#f8fafc", "#0f172a", "#e5e7eb"
+        label = status or "Assigned"
+
+    return f"""
+    <span style="
+        display:inline-flex; align-items:center; gap:8px;
+        padding:4px 10px;
+        border-radius:999px;
+        border:1px solid {bd};
+        background:{bg};
+        color:{fg};
+        font-size:12px;
+        font-weight:900;">
+        {label}
+    </span>
+    """
+
+
+def render_status_legend():
+    st.markdown(
+        status_chip("Assigned")
+        + " "
+        + status_chip("In Progress")
+        + " "
+        + status_chip("Report Submitted")
+        + " "
+        + status_chip("Closed"),
+        unsafe_allow_html=True,
+    )
+
+
+# ============================================================
+# Streamlit config
+# ============================================================
 st.set_page_config(
     page_title="Audit Assignment System",
     page_icon="✅",
     layout="wide",
+    initial_sidebar_state="expanded",
 )
 
+inject_enterprise_css()
 engine.ensure_seed_files()
 
-# -----------------------------
-# Checklist catalog seeding (safe, does not depend on ensure_checklist_catalog)
-# -----------------------------
+# ============================================================
+# Checklist catalog seeding (safe, additive only)
+# ============================================================
 CHECKLIST_CANDIDATE_FILES = [
-    "checklist.catalog.json",     # your file
+    "checklist.catalog.json",
     "checklist_catalog.json",
     "checklists_catalog.json",
 ]
@@ -199,9 +450,9 @@ def ensure_checklist_seed_data():
 
 ensure_checklist_seed_data()
 
-# -----------------------------
+# ============================================================
 # Session state
-# -----------------------------
+# ============================================================
 if "auth" not in st.session_state:
     st.session_state.auth = {
         "logged_in": False,
@@ -226,31 +477,9 @@ def require_login():
         st.stop()
 
 
-def audits_table(audits: List[Dict]):
-    if not audits:
-        st.info("No audits found.")
-        return
-
-    rows = []
-    for a in audits:
-        rows.append(
-            {
-                "Audit ID": a.get("audit_id"),
-                "Title": a.get("title"),
-                "Dept": a.get("audited_department"),
-                "Auditor": a.get("assigned_auditor"),
-                "Status": a.get("status"),
-                "Created": a.get("created_at"),
-                "Due": a.get("due_date"),
-                "Reports": len(a.get("reports", [])),
-            }
-        )
-    st.dataframe(rows, use_container_width=True, hide_index=True)
-
-
-# -----------------------------
+# ============================================================
 # Timetable reminder helpers
-# -----------------------------
+# ============================================================
 def _parse_slot_start_end(slot_str: str):
     start_s, end_s = slot_str.split("-", 1)
     return start_s.strip(), end_s.strip()
@@ -298,7 +527,7 @@ def show_auditor_timetable_reminder(auditor_name: str, remind_within_minutes: in
                 end_dt = end_dt.replace(tzinfo=tz)
 
             if start_dt <= now < end_dt:
-                ongoing_msg = f"⏱️ Your audit is happening now ({slot}) for **{dept}**."
+                ongoing_msg = f"Active now: {slot} | Department: {dept}"
                 break
 
             if now < start_dt:
@@ -315,12 +544,12 @@ def show_auditor_timetable_reminder(auditor_name: str, remind_within_minutes: in
         upcoming_candidates.sort(key=lambda x: x[0])
         mins, slot, dept = upcoming_candidates[0]
         if mins <= remind_within_minutes:
-            st.info(f"🔔 You have an audit in **{mins} min** at **{slot.split('-')[0]}** for **{dept}**.")
+            st.info(f"Upcoming audit: in {mins} minutes | Start: {slot.split('-')[0]} | Department: {dept}")
 
 
-# -----------------------------
+# ============================================================
 # Helpers: persistent dropdown options
-# -----------------------------
+# ============================================================
 def get_department_options_with_other() -> List[str]:
     return engine.load_departments_catalog() + ["Other"]
 
@@ -335,9 +564,9 @@ def _get_checklist_catalog_depts() -> List[str]:
     return sorted([k for k in catalog.keys() if str(k).strip()], key=lambda x: str(x).lower())
 
 
-# -----------------------------
+# ============================================================
 # Audit dropdown labels (Title-first) for UI
-# -----------------------------
+# ============================================================
 def build_audit_dropdown(
     audits: List[Dict],
     *,
@@ -382,15 +611,54 @@ def build_audit_dropdown(
     return labels, label_to_id
 
 
-# -----------------------------
+# ============================================================
+# Audits table (with optional search for professionalism)
+# ============================================================
+def audits_table(audits: List[Dict], *, search_query: str = ""):
+    if not audits:
+        st.info("No audits found.")
+        return
+
+    q = (search_query or "").strip().lower()
+
+    rows = []
+    for a in audits:
+        row = {
+            "Audit ID": a.get("audit_id"),
+            "Title": a.get("title"),
+            "Dept": a.get("audited_department"),
+            "Auditor": a.get("assigned_auditor"),
+            "Status": a.get("status"),
+            "Created": a.get("created_at"),
+            "Due": a.get("due_date"),
+            "Reports": len(a.get("reports", [])),
+        }
+
+        if q:
+            blob = " ".join([str(v or "") for v in row.values()]).lower()
+            if q not in blob:
+                continue
+
+        rows.append(row)
+
+    if not rows:
+        st.info("No results for the current search filter.")
+        return
+
+    st.dataframe(rows, use_container_width=True, hide_index=True)
+
+
+# ============================================================
 # Login UI
-# -----------------------------
+# ============================================================
 if not st.session_state.auth["logged_in"]:
-    st.title("✅ Audit Assignment System")
-    st.caption(
-        "RBAC enabled: Admin has full access; Auditor sees only assigned audits; "
-        "auditor must upload and submit report before completing an audit."
+    render_topbar(username="Not signed in", role="Access")
+
+    render_panel(
+        "Secure Login",
+        "RBAC enabled. Admin has full access; Auditor sees assigned audits only; report submission required before closure.",
     )
+    st.write("")
 
     with st.form("login_form"):
         username = st.text_input("Username", placeholder="admin or auditor username")
@@ -411,33 +679,58 @@ if not st.session_state.auth["logged_in"]:
             st.success("Logged in.")
             st.rerun()
 
-    st.markdown("### Default seed credentials")
+    st.write("")
+    render_panel("Default seed credentials", "Use these only for initial testing.")
     st.write("- Admin: **admin / admin123**")
     st.write("- Auditor: username is lowercase name (no spaces), password: **auditor123**")
     st.stop()
 
-# -----------------------------
+# ============================================================
 # Main App
-# -----------------------------
+# ============================================================
 require_login()
 
 role = st.session_state.auth["role"]
 username = st.session_state.auth["username"]
 person_name = st.session_state.auth["person_name"]
 
+render_topbar(username=username, role=role)
+
 if role == "auditor" and person_name:
     show_auditor_timetable_reminder(person_name, remind_within_minutes=30)
 
-st.sidebar.title("Navigation")
-st.sidebar.write(f"Logged in as: **{username}**")
-st.sidebar.write(f"Role: **{role}**")
-st.sidebar.button("Logout", on_click=logout)
-
 all_audits = engine.list_audits()
 
-# -----------------------------
+# ============================================================
+# Sidebar (brand strip + session info + logout)
+# ============================================================
+with st.sidebar:
+    st.markdown(
+        """
+        <div style="
+            padding:12px 12px;
+            border:1px solid #e5e7eb;
+            border-radius:14px;
+            background:#ffffff;
+            box-shadow:0 8px 18px rgba(15,23,42,0.05);
+            margin-bottom:12px;">
+          <div style="font-weight:950; font-size:14px; color:#0f172a;">Audit Assignment</div>
+          <div style="font-size:12px; color:#64748b;">Enterprise scheduling and audit closure</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("### Session")
+    st.markdown(f"<div class='subtle'>User: <b>{username}</b></div>", unsafe_allow_html=True)
+    st.markdown(f"<div class='subtle'>Role: <b>{role}</b></div>", unsafe_allow_html=True)
+    st.write("")
+    st.button("Logout", on_click=logout, use_container_width=True)
+    st.write("")
+
+# ============================================================
 # Sidebar menus with nested Checklist
-# -----------------------------
+# ============================================================
 checklist_department: Optional[str] = None
 
 if role == "admin":
@@ -484,16 +777,58 @@ else:
                 key="auditor_checklist_dept_radio",
             )
 
-# -----------------------------
+# ============================================================
 # Admin Pages
-# -----------------------------
+# ============================================================
 if role == "admin" and page == "Dashboard":
     st.title("Admin Dashboard")
+    render_panel("Portfolio Overview", "Visibility into audits, reports, and auditor availability.")
+    st.write("")
 
-    st.subheader("All audits")
-    audits_table(all_audits)
+    # Quick actions (UI only; does not change your logic)
+    qa1, qa2, qa3 = st.columns(3)
+    with qa1:
+        st.button("Create Audit", use_container_width=True)
+    with qa2:
+        st.button("Open Audit Plan", use_container_width=True)
+    with qa3:
+        st.button("Generate Final PDF", use_container_width=True)
 
-    st.subheader("Auditor availability (FREE/BUSY)")
+    st.write("")
+    render_status_legend()
+    st.write("")
+
+    # KPIs (display only)
+    total = len(all_audits)
+    open_count = sum(1 for a in all_audits if str(a.get("status", "")).strip().lower() != "closed")
+    closed_count = sum(1 for a in all_audits if str(a.get("status", "")).strip().lower() == "closed")
+    pending_reports = sum(
+        1
+        for a in all_audits
+        if len(a.get("reports", [])) == 0 and str(a.get("status", "")).strip().lower() != "closed"
+    )
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        render_kpi("Total Audits", str(total), "All time")
+    with c2:
+        render_kpi("Open Audits", str(open_count), "Assigned or in progress")
+    with c3:
+        render_kpi("Closed Audits", str(closed_count), "Completed")
+    with c4:
+        render_kpi("No Report Yet", str(pending_reports), "Open audits without uploads")
+
+    st.write("")
+    render_panel("All Audits", "Search and review audit assignments and status.")
+    st.write("")
+
+    q = st.text_input("Search audits", placeholder="Search by title, department, auditor, status, ID")
+    audits_table(all_audits, search_query=q)
+
+    st.write("")
+    render_panel("Auditor Availability", "FREE or BUSY based on active audit assignments.")
+    st.write("")
+
     people = engine.load_people()
     state = engine.load_state()
     skill_cat = get_skill_catalog()
@@ -512,6 +847,13 @@ if role == "admin" and page == "Dashboard":
         )
     st.dataframe(rows, use_container_width=True, hide_index=True)
 
+    st.write("")
+    render_panel("Recent Activity", "Operational activity view (optional).")
+    st.write("")
+    st.info(
+        "If you want, we can add an audit-trail log (activity_log.json) that records: audit assigned, checklist saved, report uploaded, status updated."
+    )
+
 elif role == "admin" and page == "Auditors & Skills":
     st.title("Auditors & Skills")
     st.caption(
@@ -521,7 +863,9 @@ elif role == "admin" and page == "Auditors & Skills":
     left, right = st.columns([1, 1])
 
     with left:
-        st.subheader("Add New Auditor")
+        render_panel("Add New Auditor", "Create auditor profiles and maintain the controlled skill library.")
+        st.write("")
+
         skill_cat = get_skill_catalog()
         skill_keys = sorted(skill_cat.keys())
 
@@ -594,13 +938,15 @@ elif role == "admin" and page == "Auditors & Skills":
             st.write(pretty if pretty else ["(No required skills defined yet)"])
 
     with right:
-        st.subheader("Auditor Dashboard (people.json)")
+        render_panel("Auditor Dashboard", "All auditors loaded from people.json.")
+        st.write("")
+
         people_raw = engine.list_people_records()
         state = engine.load_state()
         skill_cat = get_skill_catalog()
 
         rows = []
-        for p in sorted(people_raw, key=lambda x: (str(x.get("department", "")), str(x.get("name", "")).lower())):
+        for p in sorted(people_raw, key=lambda x: (str(p.get("department", "")), str(p.get("name", "")).lower())):
             nm = str(p.get("name", "")).strip()
             skill_keys = p.get("skills", [])
             rows.append(
@@ -820,9 +1166,9 @@ elif role == "admin" and page == "Audit Plan":
                 else:
                     st.error(msg)
 
-# -----------------------------
+# ============================================================
 # Checklist pages
-# -----------------------------
+# ============================================================
 elif role == "admin" and page == "Checklist":
     st.title("Checklist (Admin)")
     st.caption("Create department-wise checklists with sections. Auditors will fill Observation and Evidence during audits.")
@@ -834,7 +1180,8 @@ elif role == "admin" and page == "Checklist":
         st.stop()
 
     dept_for_checklist = checklist_department
-    st.subheader(f"Department: {dept_for_checklist}")
+    render_panel("Checklist Library", f"Department: {dept_for_checklist}")
+    st.write("")
 
     sections = engine.get_sections_for_department(dept_for_checklist)
     pick_section = st.selectbox("Section", ["(Create New)"] + sections, key=f"chk_admin_section_{dept_for_checklist}")
@@ -909,14 +1256,15 @@ elif role == "auditor" and page == "Checklist":
         st.stop()
 
     mode = st.radio(
-        "What do you want to do?",
+        "Mode",
         ["Fill Observation/Evidence for my audit", "Create/Edit checklist library"],
         horizontal=True,
         key=f"aud_chk_mode_{dept}",
     )
 
     if mode == "Create/Edit checklist library":
-        st.subheader(f"Edit Checklist Library: {dept}")
+        render_panel("Edit Checklist Library", f"Department: {dept}")
+        st.write("")
 
         sections = engine.get_sections_for_department(dept)
         pick_section = st.selectbox("Section", ["(Create New)"] + sections, key=f"chk_aud_section_{dept}")
@@ -1035,11 +1383,13 @@ elif role == "auditor" and page == "Checklist":
             else:
                 st.error(msg)
 
-# -----------------------------
+# ============================================================
 # Audit Details
-# -----------------------------
+# ============================================================
 elif (role == "admin" and page == "Audit Details") or (role == "auditor" and page == "Audit Details"):
     st.title("Audit Details")
+    render_status_legend()
+    st.write("")
 
     labels, label_to_id = build_audit_dropdown(
         all_audits,
@@ -1157,11 +1507,13 @@ elif (role == "admin" and page == "Audit Details") or (role == "auditor" and pag
             else:
                 st.error(msg)
 
-# -----------------------------
+# ============================================================
 # Reports (Admin generates; everyone can download; admin can delete)
-# -----------------------------
+# ============================================================
 elif page == "Reports":
     st.title("Final Reports (PDF)")
+    render_panel("Report Centre", "Generate and manage final consolidated audit reports.")
+    st.write("")
 
     if role == "admin":
         st.subheader("Generate final report PDF")
@@ -1174,7 +1526,6 @@ elif page == "Reports":
             key="rep_statuses",
         )
 
-        # Which audits match statuses
         statuses_lower = {s.strip().lower() for s in statuses if str(s).strip()}
         selectable_audits = [a for a in all_audits if str(a.get("status", "")).strip().lower() in statuses_lower]
 
@@ -1270,11 +1621,11 @@ elif page == "Reports":
             file_path = r.get("file_path")
             report_id = r.get("report_id")
 
-            st.write(
-                f"📄 **{file_name}**  \n"
-                f"Generated at: {r.get('generated_at')}  \n"
-                f"Generated by: {r.get('generated_by')}"
+            render_panel(
+                file_name or "Report",
+                f"Generated at: {r.get('generated_at')} | Generated by: {r.get('generated_by')}",
             )
+            st.write("")
 
             c1, c2 = st.columns([1, 1])
 
@@ -1303,13 +1654,20 @@ elif page == "Reports":
 
             st.divider()
 
-# -----------------------------
+# ============================================================
 # Auditor Pages
-# -----------------------------
+# ============================================================
 if role == "auditor" and page == "My Audits":
     st.title("My Audits")
+    render_panel("Assigned Audits", "Only audits assigned to your account are visible here.")
+    st.write("")
+
+    q = st.text_input("Search my audits", placeholder="Search by title, department, status, ID")
     my = [a for a in all_audits if a.get("assigned_auditor") == person_name]
-    audits_table(my)
+    render_status_legend()
+    st.write("")
+    audits_table(my, search_query=q)
+
     st.info("Rule: Upload at least one report, submit it, then you can complete the audit.")
 
 elif role == "auditor" and page == "My Timetable":
@@ -1317,7 +1675,8 @@ elif role == "auditor" and page == "My Timetable":
     from datetime import timedelta
 
     st.title("My Timetable")
-    st.caption("Shows the timetable slots assigned to you by Admin.")
+    render_panel("Timetable View", "Slots assigned by Admin are displayed for the selected date range.")
+    st.write("")
 
     start_date = st.date_input("From", value=date.today(), key="mytt_from")
     days = st.number_input("Number of days", min_value=1, max_value=60, value=7, step=1, key="mytt_days")

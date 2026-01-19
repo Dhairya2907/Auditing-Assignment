@@ -1,0 +1,23 @@
+[
+  {
+    "time": "2026-01-19 12:30:42",
+    "user": "admin",
+    "role": "admin",
+    "action": "Logged in",
+    "details": ""
+  },
+  {
+    "time": "2026-01-19 12:59:19",
+    "user": "admin",
+    "role": "admin",
+    "action": "Logged in",
+    "details": ""
+  },
+  {
+    "time": "2026-01-19 13:02:16",
+    "user": "admin",
+    "role": "admin",
+    "action": "Logged in",
+    "details": ""
+  }
+]
