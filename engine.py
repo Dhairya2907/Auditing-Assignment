@@ -1,39 +1,37 @@
 from __future__ import annotations
 
-import json
 import os
+import json
 import uuid
 import hashlib
 import hmac
-import timetable
+import sqlite3
 
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Set, Optional, Tuple
 
-# -----------------------------
-# Files
-# -----------------------------
-PEOPLE_FILE = "people.json"
-STATE_FILE = "audit_state.json"
-AUDITS_FILE = "audits.json"
-USERS_FILE = "users.json"
+import timetable  # keep your existing import
+
+
+# ============================================================
+# SQLite (NO external service) + Multi-tenant storage
+# ============================================================
+
+# Where SQLite DB will be stored
+SQLITE_DB_PATH = os.getenv("SQLITE_DB_PATH", os.path.join("data", "app.db"))
+
+# Uploads root (tenant-separated subfolders)
 UPLOADS_DIR = "uploads"
 
-DEPARTMENTS_FILE = "departments.json"
-SKILLS_CATALOG_FILE = "skills_catalog.json"
-DEPT_REQUIRED_SKILLS_FILE = "dept_required_skills.json"
-CHECKLISTS_CATALOG_FILE = "checklists_catalog.json"
+# Default tenant code used when your UI does not ask for tenant yet
+DEFAULT_TENANT_CODE = os.getenv("DEFAULT_TENANT_CODE", "default")
 
 # -----------------------------
-# Default departments (seed)
+# Default seed data (per tenant)
 # -----------------------------
 DEFAULT_DEPARTMENTS = ["HR", "MR", "Purchase", "Sales and Marketing"]
 
-# -----------------------------
-# Default controlled skills (seed)
-# Stored as skill_key -> skill_label
-# -----------------------------
 DEFAULT_SKILLS = {
     # HR
     "hr_competency_training_requirements": "Understanding of competency and training requirements",
@@ -51,9 +49,6 @@ DEFAULT_SKILLS = {
     "sm_complaint_intake_escalation": "Awareness of complaint intake and escalation",
 }
 
-# -----------------------------
-# Default required skills per department (seed)
-# -----------------------------
 DEFAULT_DEPT_REQUIRED_SKILLS = {
     "HR": [
         "hr_competency_training_requirements",
@@ -70,23 +65,24 @@ DEFAULT_DEPT_REQUIRED_SKILLS = {
         "sm_customer_communication_feedback",
         "sm_complaint_intake_escalation",
     ],
-    # MR intentionally left without required skills (you can add later if you want)
     "MR": [],
 }
 
-# -----------------------------
+
+# ============================================================
 # Data models
-# -----------------------------
+# ============================================================
 @dataclass(frozen=True)
 class Person:
     name: str
     department: str
-    skills: Set[str]  # skill KEYS (from skills_catalog.json)
+    skills: Set[str]  # skill KEYS
     level: str        # "experienced" or "fresher"
 
-# -----------------------------
+
+# ============================================================
 # Helpers
-# -----------------------------
+# ============================================================
 def _now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
@@ -96,38 +92,23 @@ def _normalize_username(name: str) -> str:
 def _normalize_text(s: str) -> str:
     return " ".join(str(s or "").strip().split())
 
-def load_json(path: str, default_obj):
-    if not os.path.exists(path):
-        return default_obj
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-def save_json(path: str, obj) -> None:
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(obj, f, indent=2, ensure_ascii=False)
-
 def ensure_dirs() -> None:
     os.makedirs(UPLOADS_DIR, exist_ok=True)
+    os.makedirs(os.path.dirname(SQLITE_DB_PATH), exist_ok=True)
 
-def _read_json(path: str, default):
-    if not os.path.exists(path):
-        return default
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+def _uuid() -> str:
+    return str(uuid.uuid4())
 
-def _write_json(path: str, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
 
-# -----------------------------
-# Password hashing (PBKDF2)
-# -----------------------------
+# ============================================================
+# Password hashing (PBKDF2) - keep your existing approach
+# ============================================================
 def _pbkdf2_hash(password: str, salt_hex: str, iterations: int) -> str:
     salt = bytes.fromhex(salt_hex)
     dk = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt, iterations)
     return dk.hex()
 
-def make_password_record(password: str) -> Dict:
+def make_password_record(password: str) -> Dict[str, Any]:
     salt = os.urandom(16).hex()
     iterations = 150_000
     return {
@@ -136,7 +117,7 @@ def make_password_record(password: str) -> Dict:
         "hash": _pbkdf2_hash(password, salt, iterations),
     }
 
-def verify_password(password: str, rec: Dict) -> bool:
+def verify_password(password: str, rec: Dict[str, Any]) -> bool:
     salt = rec.get("salt", "")
     it = int(rec.get("iterations", 150_000))
     expected = rec.get("hash", "")
@@ -145,149 +126,221 @@ def verify_password(password: str, rec: Dict) -> bool:
     got = _pbkdf2_hash(password, salt, it)
     return hmac.compare_digest(got, expected)
 
-# -----------------------------
-# Catalog: departments
-# -----------------------------
-def load_departments_catalog() -> List[str]:
-    ensure_seed_files()
-    deps = load_json(DEPARTMENTS_FILE, [])
-    out: List[str] = []
-    seen = set()
-    for d in deps:
-        dn = _normalize_text(d)
-        if not dn:
-            continue
-        key = dn.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(dn)
-    out.sort(key=lambda x: x.lower())
-    return out
+def _verify_password_columns(password: str, salt_hex: str, iterations: int, hash_hex: str) -> bool:
+    if not salt_hex or not hash_hex:
+        return False
+    try:
+        iterations = int(iterations)
+    except Exception:
+        return False
+    got = _pbkdf2_hash(password, salt_hex, iterations)
+    return hmac.compare_digest(got, hash_hex)
 
-def add_department_to_catalog(dept: str) -> None:
-    dept = _normalize_text(dept)
-    if not dept:
-        return
-    deps = load_json(DEPARTMENTS_FILE, [])
-    lower = {str(d).strip().lower() for d in deps if str(d).strip()}
-    if dept.lower() in lower:
-        return
-    deps.append(dept)
-    save_json(DEPARTMENTS_FILE, deps)
 
-# -----------------------------
-# Catalog: skills (key -> label)
-# -----------------------------
-def load_skills_catalog() -> Dict[str, str]:
-    ensure_seed_files()
-    cat = load_json(SKILLS_CATALOG_FILE, {})
-    out: Dict[str, str] = {}
-    for k, v in (cat or {}).items():
-        kk = str(k).strip().lower()
-        vv = _normalize_text(v)
-        if kk and vv:
-            out[kk] = vv
-    return out
+# ============================================================
+# SQLite DB layer
+# ============================================================
+def _connect() -> sqlite3.Connection:
+    ensure_dirs()
+    conn = sqlite3.connect(SQLITE_DB_PATH, timeout=30, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
 
-def _save_skills_catalog(cat: Dict[str, str]) -> None:
-    save_json(SKILLS_CATALOG_FILE, cat)
+    # safer multi-user usage
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA synchronous=NORMAL;")
+    conn.execute("PRAGMA foreign_keys=ON;")
+    conn.execute("PRAGMA busy_timeout=30000;")
+    return conn
 
-def ensure_skill_in_catalog(label: str) -> str:
-    label = _normalize_text(label)
-    if not label:
-        raise ValueError("Skill label cannot be empty.")
+def _fetch_one(sql: str, params: Tuple[Any, ...] = ()) -> Optional[Dict[str, Any]]:
+    with _connect() as conn:
+        cur = conn.execute(sql, params)
+        row = cur.fetchone()
+        return dict(row) if row else None
 
-    cat = load_skills_catalog()
+def _fetch_all(sql: str, params: Tuple[Any, ...] = ()) -> List[Dict[str, Any]]:
+    with _connect() as conn:
+        cur = conn.execute(sql, params)
+        return [dict(r) for r in cur.fetchall()]
 
-    for k, v in cat.items():
-        if v.strip().lower() == label.lower():
-            return k
+def _execute(sql: str, params: Tuple[Any, ...] = ()) -> int:
+    with _connect() as conn:
+        cur = conn.execute(sql, params)
+        return cur.rowcount
 
-    new_key = f"custom_{uuid.uuid4().hex[:10]}"
-    cat[new_key] = label
-    _save_skills_catalog(cat)
-    return new_key
+def _executescript(script: str) -> None:
+    with _connect() as conn:
+        conn.executescript(script)
 
-def ensure_skill_key_exists(skill_key: str, fallback_label: str = "") -> str:
-    kk = str(skill_key).strip().lower()
-    if not kk:
-        raise ValueError("Skill key cannot be empty.")
-    cat = load_skills_catalog()
-    if kk in cat:
-        return kk
-    label = _normalize_text(fallback_label) or kk
-    cat[kk] = label
-    _save_skills_catalog(cat)
-    return kk
 
-# -----------------------------
-# Required skills per department
-# -----------------------------
-def load_dept_required_skills() -> Dict[str, List[str]]:
-    ensure_seed_files()
-    data = load_json(DEPT_REQUIRED_SKILLS_FILE, {})
-    out: Dict[str, List[str]] = {}
-    for dept, keys in (data or {}).items():
-        d = _normalize_text(dept)
-        if not d:
-            continue
-        ks = []
-        for k in (keys or []):
-            kk = str(k).strip().lower()
-            if kk:
-                ks.append(kk)
-        seen = set()
-        uniq = []
-        for k in ks:
-            if k in seen:
-                continue
-            seen.add(k)
-            uniq.append(k)
-        out[d] = uniq
-    return out
+# ============================================================
+# Schema + seed
+# ============================================================
+_SCHEMA = """
+create table if not exists tenants (
+  id text primary key,
+  tenant_code text not null unique,
+  name text not null,
+  created_at text not null default (datetime('now'))
+);
 
-def set_dept_required_skills(dept: str, skill_keys: List[str]) -> None:
-    dept = _normalize_text(dept)
-    if not dept:
-        raise ValueError("Department cannot be empty.")
+create table if not exists users (
+  id text primary key,
+  tenant_id text not null,
+  username text not null,
+  role text not null check (role in ('admin','manager','auditor')),
+  person_name text,
+  password_salt text not null,
+  password_iterations integer not null,
+  password_hash text not null,
+  is_active integer not null default 1,
+  created_at text not null default (datetime('now')),
+  unique (tenant_id, username),
+  foreign key (tenant_id) references tenants(id) on delete cascade
+);
+create index if not exists idx_users_tenant on users(tenant_id);
 
-    add_department_to_catalog(dept)
+create table if not exists departments (
+  id text primary key,
+  tenant_id text not null,
+  name text not null,
+  created_at text not null default (datetime('now')),
+  unique (tenant_id, name),
+  foreign key (tenant_id) references tenants(id) on delete cascade
+);
+create index if not exists idx_departments_tenant on departments(tenant_id);
 
-    cleaned: List[str] = []
-    seen = set()
-    for k in (skill_keys or []):
-        kk = str(k).strip().lower()
-        if not kk:
-            continue
-        kk = ensure_skill_key_exists(kk)
-        if kk in seen:
-            continue
-        seen.add(kk)
-        cleaned.append(kk)
+create table if not exists skills_catalog (
+  id text primary key,
+  tenant_id text not null,
+  skill_key text not null,
+  skill_label text not null,
+  created_at text not null default (datetime('now')),
+  unique (tenant_id, skill_key),
+  foreign key (tenant_id) references tenants(id) on delete cascade
+);
+create index if not exists idx_skills_tenant on skills_catalog(tenant_id);
 
-    data = load_json(DEPT_REQUIRED_SKILLS_FILE, {})
-    data[dept] = cleaned
-    save_json(DEPT_REQUIRED_SKILLS_FILE, data)
+create table if not exists dept_required_skills (
+  id text primary key,
+  tenant_id text not null,
+  department_name text not null,
+  skill_key text not null,
+  unique (tenant_id, department_name, skill_key),
+  foreign key (tenant_id) references tenants(id) on delete cascade
+);
+create index if not exists idx_deptreq_tenant on dept_required_skills(tenant_id);
 
-def get_required_skills_for_dept(dept: str) -> Set[str]:
-    dept = _normalize_text(dept)
-    mapping = load_dept_required_skills()
-    keys = mapping.get(dept, [])
-    return set(keys)
+create table if not exists people (
+  id text primary key,
+  tenant_id text not null,
+  name text not null,
+  department text not null,
+  level text not null check (level in ('experienced','fresher')),
+  is_active integer not null default 1,
+  created_at text not null default (datetime('now')),
+  unique (tenant_id, name),
+  foreign key (tenant_id) references tenants(id) on delete cascade
+);
+create index if not exists idx_people_tenant on people(tenant_id);
 
-# -----------------------------
-# Checklists catalog (Admin-managed)
-# Structure: { dept: { section: [item, item, ...] } }
-# -----------------------------
-def ensure_checklists_catalog() -> None:
+create table if not exists person_skills (
+  id text primary key,
+  tenant_id text not null,
+  person_name text not null,
+  skill_key text not null,
+  unique (tenant_id, person_name, skill_key),
+  foreign key (tenant_id) references tenants(id) on delete cascade
+);
+create index if not exists idx_personskills_tenant on person_skills(tenant_id);
+
+create table if not exists audits (
+  audit_id text primary key,
+  tenant_id text not null,
+  title text,
+  scope text,
+  audited_department text not null,
+  required_skills_json text not null,
+  assigned_auditor text not null,
+  auditor_level text not null,
+  status text not null,
+  created_by text not null,
+  created_at text not null,
+  due_date text,
+  reports_json text not null,
+  report_submitted_at text,
+  closed_at text,
+  checklists_json text not null,
+  foreign key (tenant_id) references tenants(id) on delete cascade
+);
+create index if not exists idx_audits_tenant on audits(tenant_id);
+
+create table if not exists audit_state (
+  tenant_id text primary key,
+  busy_by_name_json text not null,
+  audit_history_json text not null,
+  foreign key (tenant_id) references tenants(id) on delete cascade
+);
+
+create table if not exists checklists_catalog (
+  id text primary key,
+  tenant_id text not null,
+  department text not null,
+  section text not null,
+  item_order integer not null,
+  item_text text not null,
+  unique (tenant_id, department, section, item_order),
+  foreign key (tenant_id) references tenants(id) on delete cascade
+);
+create index if not exists idx_chk_tenant on checklists_catalog(tenant_id);
+"""
+
+def init_db() -> None:
+    _executescript(_SCHEMA)
+
+def _get_tenant_by_code(tenant_code: str) -> Optional[Dict[str, Any]]:
+    tenant_code = _normalize_text(tenant_code).lower()
+    return _fetch_one(
+        "select id, tenant_code, name from tenants where tenant_code = ? limit 1;",
+        (tenant_code,),
+    )
+
+def ensure_tenant(tenant_code: str, tenant_name: str = "") -> str:
     """
-    Seed checklists_catalog.json ONLY if missing.
-    If file exists, do NOT overwrite admin edits.
+    Create tenant if missing. Returns tenant_id.
     """
-    if os.path.exists(CHECKLISTS_CATALOG_FILE):
+    init_db()
+    tenant_code = _normalize_text(tenant_code).lower()
+    if not tenant_code:
+        tenant_code = DEFAULT_TENANT_CODE
+
+    row = _get_tenant_by_code(tenant_code)
+    if row:
+        return str(row["id"])
+
+    tenant_id = _uuid()
+    name = _normalize_text(tenant_name) or tenant_code.upper()
+    _execute(
+        "insert into tenants (id, tenant_code, name) values (?, ?, ?);",
+        (tenant_id, tenant_code, name),
+    )
+    return tenant_id
+
+def _ensure_state_row(tenant_id: str) -> None:
+    row = _fetch_one("select tenant_id from audit_state where tenant_id = ?;", (tenant_id,))
+    if row:
+        return
+    _execute(
+        "insert into audit_state (tenant_id, busy_by_name_json, audit_history_json) values (?, ?, ?);",
+        (tenant_id, json.dumps({}), json.dumps([])),
+    )
+
+def _seed_checklists_if_empty(tenant_id: str) -> None:
+    existing = _fetch_one("select id from checklists_catalog where tenant_id = ? limit 1;", (tenant_id,))
+    if existing:
         return
 
+    # Seed (same content you had, minimal changes)
     seed = {
         "HR": {
             "Resource Planning": [
@@ -334,7 +387,6 @@ def ensure_checklists_catalog() -> None:
                 "Are appropriate evaluation methods selected?",
             ],
         },
-
         "MR": {
             "General Requirements": [
                 "Does top management conduct management reviews at planned intervals?",
@@ -373,7 +425,6 @@ def ensure_checklists_catalog() -> None:
                 "Are management review minutes legible, dated, and approved?",
             ],
         },
-
         "Purchase": {
             "Supplier Selection": [
                 "Is supplier selection initiated when a new material, component, or service is required?",
@@ -421,71 +472,67 @@ def ensure_checklists_catalog() -> None:
         },
     }
 
-    _write_json(CHECKLISTS_CATALOG_FILE, seed)
+    for dept, sections in seed.items():
+        for section, items in sections.items():
+            for i, item in enumerate(items, start=1):
+                _execute(
+                    """
+                    insert into checklists_catalog
+                    (id, tenant_id, department, section, item_order, item_text)
+                    values (?, ?, ?, ?, ?, ?);
+                    """,
+                    (_uuid(), tenant_id, dept, section, i, item),
+                )
 
-def get_checklist_catalog() -> Dict[str, Dict[str, List[str]]]:
-    ensure_checklists_catalog()
-    return _read_json(CHECKLISTS_CATALOG_FILE, {})
-
-def get_sections_for_department(dept: str) -> List[str]:
-    dept = _normalize_text(dept)
-    catalog = get_checklist_catalog()
-    sections = list(catalog.get(dept, {}).keys())
-    sections.sort(key=lambda x: x.lower())
-    return sections
-
-def get_items_for_department_section(dept: str, section: str) -> List[str]:
-    dept = _normalize_text(dept)
-    section = _normalize_text(section)
-    catalog = get_checklist_catalog()
-    return catalog.get(dept, {}).get(section, [])
-
-def upsert_section_items(dept: str, section: str, items: List[str]) -> None:
-    dept = _normalize_text(dept)
-    section = _normalize_text(section)
-    if not dept or not section:
-        return
-    catalog = get_checklist_catalog()
-    if dept not in catalog:
-        catalog[dept] = {}
-    catalog[dept][section] = [str(x).strip() for x in (items or []) if str(x).strip()]
-    _write_json(CHECKLISTS_CATALOG_FILE, catalog)
-
-def delete_section(dept: str, section: str) -> None:
-    dept = _normalize_text(dept)
-    section = _normalize_text(section)
-    catalog = get_checklist_catalog()
-    if dept in catalog and section in catalog[dept]:
-        del catalog[dept][section]
-        _write_json(CHECKLISTS_CATALOG_FILE, catalog)
-
-# -----------------------------
-# Seed files (NO recursion)
-# -----------------------------
-def ensure_seed_files() -> None:
+def ensure_seed_files(tenant_code: str = "", tenant_name: str = "") -> str:
     """
-    Creates required JSON files if missing.
-    IMPORTANT: This must NOT call load_people()/load_users() to avoid recursion.
+    OLD name kept for compatibility with your existing app.
+    Now it creates DB schema + tenant + per-tenant seeds.
+    Returns tenant_id.
     """
+    init_db()
     ensure_dirs()
 
-    # seed departments.json
-    if not os.path.exists(DEPARTMENTS_FILE):
-        save_json(DEPARTMENTS_FILE, DEFAULT_DEPARTMENTS)
+    tenant_code = _normalize_text(tenant_code).lower() or DEFAULT_TENANT_CODE
+    tenant_id = ensure_tenant(tenant_code, tenant_name)
 
-    # seed skills_catalog.json
-    if not os.path.exists(SKILLS_CATALOG_FILE):
-        save_json(SKILLS_CATALOG_FILE, DEFAULT_SKILLS)
+    # seed departments
+    for d in DEFAULT_DEPARTMENTS:
+        add_department_to_catalog(d, tenant_id=tenant_id)
 
-    # seed dept_required_skills.json
-    if not os.path.exists(DEPT_REQUIRED_SKILLS_FILE):
-        save_json(DEPT_REQUIRED_SKILLS_FILE, DEFAULT_DEPT_REQUIRED_SKILLS)
+    # seed skills catalog
+    for k, v in DEFAULT_SKILLS.items():
+        ensure_skill_key_exists(k, fallback_label=v, tenant_id=tenant_id)
 
-    # seed checklists_catalog.json (HR + MR + Purchase)
-    ensure_checklists_catalog()
+    # seed dept required skills
+    for dept, keys in DEFAULT_DEPT_REQUIRED_SKILLS.items():
+        set_dept_required_skills(dept, keys, tenant_id=tenant_id)
 
-    # seed people.json
-    if not os.path.exists(PEOPLE_FILE):
+    # seed checklists (only if empty)
+    _seed_checklists_if_empty(tenant_id)
+
+    # seed state row
+    _ensure_state_row(tenant_id)
+
+    # seed admin + sample auditors only if tenant has no users
+    has_user = _fetch_one("select id from users where tenant_id = ? limit 1;", (tenant_id,))
+    if not has_user:
+        # admin
+        admin_pw = make_password_record("admin123")
+        _execute(
+            """
+            insert into users
+            (id, tenant_id, username, role, person_name, password_salt, password_iterations, password_hash, is_active, created_at)
+            values (?, ?, ?, ?, ?, ?, ?, ?, 1, ?);
+            """,
+            (
+                _uuid(), tenant_id, "admin", "admin", None,
+                admin_pw["salt"], int(admin_pw["iterations"]), admin_pw["hash"],
+                _now_iso(),
+            ),
+        )
+
+        # sample people + auditor logins
         sample_people = [
             {
                 "name": "Priya",
@@ -518,129 +565,561 @@ def ensure_seed_files() -> None:
                 "level": "experienced",
             },
         ]
-        save_json(PEOPLE_FILE, sample_people)
+        for p in sample_people:
+            add_auditor(
+                name=p["name"],
+                department=p["department"],
+                level=p["level"],
+                skills=set(p["skills"]),
+                password="auditor123",
+                tenant_id=tenant_id,
+            )
 
-    if not os.path.exists(STATE_FILE):
-        save_json(STATE_FILE, {"busy_by_name": {}, "audit_history": []})
+    return tenant_id
 
-    if not os.path.exists(AUDITS_FILE):
-        save_json(AUDITS_FILE, {"audits": []})
 
-    if not os.path.exists(USERS_FILE):
-        raw_people = load_json(PEOPLE_FILE, [])
-        users = {"users": []}
+# ============================================================
+# Tenant helpers for UI
+# ============================================================
+def get_tenant_id(tenant_code: str = "") -> str:
+    return ensure_seed_files(tenant_code=tenant_code)
 
-        users["users"].append(
-            {
-                "username": "admin",
-                "role": "admin",
-                "person_name": None,
-                "password": make_password_record("admin123"),
-                "created_at": _now_iso(),
-            }
+def get_tenant_code_from_id(tenant_id: str) -> str:
+    row = _fetch_one("select tenant_code from tenants where id = ?;", (tenant_id,))
+    return str(row["tenant_code"]) if row else DEFAULT_TENANT_CODE
+
+
+# ============================================================
+# Catalog: departments (tenant-aware)
+# ============================================================
+def load_departments_catalog(tenant_id: Optional[str] = None) -> List[str]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    rows = _fetch_all(
+        "select name from departments where tenant_id = ? order by lower(name);",
+        (tenant_id,),
+    )
+    return [str(r["name"]) for r in rows]
+
+def add_department_to_catalog(dept: str, tenant_id: Optional[str] = None) -> None:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    dept = _normalize_text(dept)
+    if not dept:
+        return
+    _execute(
+        "insert or ignore into departments (id, tenant_id, name, created_at) values (?, ?, ?, ?);",
+        (_uuid(), tenant_id, dept, _now_iso()),
+    )
+
+# ============================================================
+# Catalog: skills (key -> label) (tenant-aware)
+# ============================================================
+def load_skills_catalog(tenant_id: Optional[str] = None) -> Dict[str, str]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    rows = _fetch_all(
+        "select skill_key, skill_label from skills_catalog where tenant_id = ?;",
+        (tenant_id,),
+    )
+    out: Dict[str, str] = {}
+    for r in rows:
+        out[str(r["skill_key"]).strip().lower()] = _normalize_text(r["skill_label"])
+    return out
+
+def ensure_skill_key_exists(skill_key: str, fallback_label: str = "", tenant_id: Optional[str] = None) -> str:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    kk = str(skill_key).strip().lower()
+    if not kk:
+        raise ValueError("Skill key cannot be empty.")
+
+    row = _fetch_one(
+        "select skill_key from skills_catalog where tenant_id = ? and skill_key = ?;",
+        (tenant_id, kk),
+    )
+    if row:
+        return kk
+
+    label = _normalize_text(fallback_label) or kk
+    _execute(
+        """
+        insert into skills_catalog (id, tenant_id, skill_key, skill_label, created_at)
+        values (?, ?, ?, ?, ?);
+        """,
+        (_uuid(), tenant_id, kk, label, _now_iso()),
+    )
+    return kk
+
+def ensure_skill_in_catalog(label: str, tenant_id: Optional[str] = None) -> str:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    label = _normalize_text(label)
+    if not label:
+        raise ValueError("Skill label cannot be empty.")
+
+    row = _fetch_one(
+        "select skill_key, skill_label from skills_catalog where tenant_id = ?;",
+        (tenant_id,),
+    )
+    # quick scan: if label exists return its key
+    rows = _fetch_all(
+        "select skill_key, skill_label from skills_catalog where tenant_id = ?;",
+        (tenant_id,),
+    )
+    for r in rows:
+        if str(r["skill_label"]).strip().lower() == label.lower():
+            return str(r["skill_key"]).strip().lower()
+
+    new_key = f"custom_{uuid.uuid4().hex[:10]}"
+    ensure_skill_key_exists(new_key, fallback_label=label, tenant_id=tenant_id)
+    return new_key
+
+# ============================================================
+# Required skills per department (tenant-aware)
+# Stored as rows (dept, skill_key)
+# ============================================================
+def load_dept_required_skills(tenant_id: Optional[str] = None) -> Dict[str, List[str]]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    rows = _fetch_all(
+        """
+        select department_name, skill_key
+        from dept_required_skills
+        where tenant_id = ?
+        order by lower(department_name), lower(skill_key);
+        """,
+        (tenant_id,),
+    )
+    out: Dict[str, List[str]] = {}
+    for r in rows:
+        dept = _normalize_text(r["department_name"])
+        key = str(r["skill_key"]).strip().lower()
+        out.setdefault(dept, []).append(key)
+
+    # de-dup per dept
+    for d in list(out.keys()):
+        seen = set()
+        uniq = []
+        for k in out[d]:
+            if k in seen:
+                continue
+            seen.add(k)
+            uniq.append(k)
+        out[d] = uniq
+    return out
+
+def set_dept_required_skills(dept: str, skill_keys: List[str], tenant_id: Optional[str] = None) -> None:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    dept = _normalize_text(dept)
+    if not dept:
+        raise ValueError("Department cannot be empty.")
+
+    add_department_to_catalog(dept, tenant_id=tenant_id)
+
+    cleaned: List[str] = []
+    seen = set()
+    for k in (skill_keys or []):
+        kk = str(k).strip().lower()
+        if not kk:
+            continue
+        kk = ensure_skill_key_exists(kk, fallback_label=kk, tenant_id=tenant_id)
+        if kk in seen:
+            continue
+        seen.add(kk)
+        cleaned.append(kk)
+
+    # wipe old mapping then insert new
+    _execute(
+        "delete from dept_required_skills where tenant_id = ? and department_name = ?;",
+        (tenant_id, dept),
+    )
+    for kk in cleaned:
+        _execute(
+            """
+            insert or ignore into dept_required_skills
+            (id, tenant_id, department_name, skill_key)
+            values (?, ?, ?, ?);
+            """,
+            (_uuid(), tenant_id, dept, kk),
         )
 
-        for p in raw_people:
-            nm = str(p.get("name", "")).strip()
-            if not nm:
-                continue
-            uname = _normalize_username(nm)
-            users["users"].append(
-                {
-                    "username": uname,
-                    "role": "auditor",
-                    "person_name": nm,
-                    "password": make_password_record("auditor123"),
-                    "created_at": _now_iso(),
-                }
-            )
-        save_json(USERS_FILE, users)
+def get_required_skills_for_dept(dept: str, tenant_id: Optional[str] = None) -> Set[str]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    dept = _normalize_text(dept)
+    rows = _fetch_all(
+        """
+        select skill_key
+        from dept_required_skills
+        where tenant_id = ? and department_name = ?;
+        """,
+        (tenant_id, dept),
+    )
+    return {str(r["skill_key"]).strip().lower() for r in rows}
 
-# -----------------------------
-# Loaders
-# -----------------------------
-def load_people() -> List[Person]:
-    ensure_seed_files()
-    raw = load_json(PEOPLE_FILE, [])
-    people: List[Person] = []
 
-    dept_catalog = load_departments_catalog()
-    dept_lower = {d.lower(): d for d in dept_catalog}
+# ============================================================
+# Checklists catalog (Admin-managed) (tenant-aware)
+# Table-based, returned as nested dict for UI
+# ============================================================
+def get_checklist_catalog(tenant_id: Optional[str] = None) -> Dict[str, Dict[str, List[str]]]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    rows = _fetch_all(
+        """
+        select department, section, item_order, item_text
+        from checklists_catalog
+        where tenant_id = ?
+        order by lower(department), lower(section), item_order;
+        """,
+        (tenant_id,),
+    )
+    out: Dict[str, Dict[str, List[str]]] = {}
+    for r in rows:
+        dept = _normalize_text(r["department"])
+        section = _normalize_text(r["section"])
+        out.setdefault(dept, {}).setdefault(section, []).append(str(r["item_text"]))
+    return out
 
-    skill_cat = load_skills_catalog()
+def get_sections_for_department(dept: str, tenant_id: Optional[str] = None) -> List[str]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    dept = _normalize_text(dept)
+    rows = _fetch_all(
+        """
+        select distinct section
+        from checklists_catalog
+        where tenant_id = ? and department = ?
+        order by lower(section);
+        """,
+        (tenant_id, dept),
+    )
+    return [str(r["section"]) for r in rows]
 
-    for item in raw:
-        name = _normalize_text(item.get("name", ""))
-        dept = _normalize_text(item.get("department", ""))
-        level = str(item.get("level", "experienced")).strip().lower()
-        skills_raw = item.get("skills", [])
-        skills = set(str(s).strip().lower() for s in skills_raw if str(s).strip())
+def get_items_for_department_section(dept: str, section: str, tenant_id: Optional[str] = None) -> List[str]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    dept = _normalize_text(dept)
+    section = _normalize_text(section)
+    rows = _fetch_all(
+        """
+        select item_text
+        from checklists_catalog
+        where tenant_id = ? and department = ? and section = ?
+        order by item_order;
+        """,
+        (tenant_id, dept, section),
+    )
+    return [str(r["item_text"]) for r in rows]
 
-        if not name:
-            continue
+def upsert_section_items(dept: str, section: str, items: List[str], tenant_id: Optional[str] = None) -> None:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    dept = _normalize_text(dept)
+    section = _normalize_text(section)
+    if not dept or not section:
+        return
 
-        if dept and dept.lower() not in dept_lower:
-            add_department_to_catalog(dept)
-            dept_lower[dept.lower()] = dept
+    # delete existing section items then insert new
+    _execute(
+        "delete from checklists_catalog where tenant_id = ? and department = ? and section = ?;",
+        (tenant_id, dept, section),
+    )
+    clean_items = [str(x).strip() for x in (items or []) if str(x).strip()]
+    for idx, txt in enumerate(clean_items, start=1):
+        _execute(
+            """
+            insert into checklists_catalog
+            (id, tenant_id, department, section, item_order, item_text)
+            values (?, ?, ?, ?, ?, ?);
+            """,
+            (_uuid(), tenant_id, dept, section, idx, txt),
+        )
 
+def delete_section(dept: str, section: str, tenant_id: Optional[str] = None) -> None:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    dept = _normalize_text(dept)
+    section = _normalize_text(section)
+    if not dept or not section:
+        return
+    _execute(
+        "delete from checklists_catalog where tenant_id = ? and department = ? and section = ?;",
+        (tenant_id, dept, section),
+    )
+
+
+# ============================================================
+# People (tenant-aware)
+# ============================================================
+def load_people(tenant_id: Optional[str] = None) -> List[Person]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+
+    people_rows = _fetch_all(
+        "select name, department, level from people where tenant_id = ? and is_active = 1 order by lower(name);",
+        (tenant_id,),
+    )
+    skills_rows = _fetch_all(
+        "select person_name, skill_key from person_skills where tenant_id = ?;",
+        (tenant_id,),
+    )
+
+    skill_map: Dict[str, Set[str]] = {}
+    for r in skills_rows:
+        nm = _normalize_text(r["person_name"])
+        sk = str(r["skill_key"]).strip().lower()
+        skill_map.setdefault(nm, set()).add(sk)
+
+    out: List[Person] = []
+    for r in people_rows:
+        nm = _normalize_text(r["name"])
+        dept = _normalize_text(r["department"])
+        level = str(r["level"]).strip().lower()
         if level not in {"experienced", "fresher"}:
-            raise ValueError(f"Invalid level for {name}: '{level}'. Use 'experienced' or 'fresher'.")
+            level = "experienced"
+        out.append(Person(name=nm, department=dept, skills=skill_map.get(nm, set()), level=level))
+    return out
 
-        for k in list(skills):
-            if k not in skill_cat:
-                ensure_skill_key_exists(k, fallback_label=k)
+def list_people_records(tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    rows = _fetch_all(
+        "select name, department, level, is_active, created_at from people where tenant_id = ? order by lower(name);",
+        (tenant_id,),
+    )
+    out: List[Dict[str, Any]] = []
+    skill_rows = _fetch_all(
+        "select person_name, skill_key from person_skills where tenant_id = ?;",
+        (tenant_id,),
+    )
+    smap: Dict[str, List[str]] = {}
+    for r in skill_rows:
+        smap.setdefault(_normalize_text(r["person_name"]), []).append(str(r["skill_key"]).strip().lower())
+    for r in rows:
+        nm = _normalize_text(r["name"])
+        out.append(
+            {
+                "name": nm,
+                "department": _normalize_text(r["department"]),
+                "skills": sorted(set(smap.get(nm, []))),
+                "level": str(r["level"]).strip().lower(),
+                "is_active": bool(int(r["is_active"])),
+                "created_at": r["created_at"],
+            }
+        )
+    return out
 
-        people.append(Person(name=name, department=dept, skills=skills, level=level))
 
-    return people
+# ============================================================
+# Users + auth (tenant-aware)
+# ============================================================
+def load_users(tenant_id: Optional[str] = None) -> Dict[str, Any]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    rows = _fetch_all(
+        """
+        select username, role, person_name, password_salt, password_iterations, password_hash, created_at, is_active
+        from users
+        where tenant_id = ?
+        order by lower(username);
+        """,
+        (tenant_id,),
+    )
+    users = []
+    for r in rows:
+        users.append(
+            {
+                "username": r["username"],
+                "role": r["role"],
+                "person_name": r["person_name"],
+                "password": {
+                    "salt": r["password_salt"],
+                    "iterations": r["password_iterations"],
+                    "hash": r["password_hash"],
+                },
+                "created_at": r["created_at"],
+                "is_active": bool(int(r["is_active"])),
+            }
+        )
+    return {"users": users}
 
-def load_state() -> Dict:
-    ensure_seed_files()
-    state = load_json(STATE_FILE, {"busy_by_name": {}, "audit_history": []})
-    state.setdefault("busy_by_name", {})
-    state.setdefault("audit_history", [])
-    return state
+def find_user(username: str, tenant_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    username = _normalize_text(username).lower()
+    row = _fetch_one(
+        """
+        select id, username, role, person_name, password_salt, password_iterations, password_hash, is_active
+        from users
+        where tenant_id = ? and lower(username) = ?
+        limit 1;
+        """,
+        (tenant_id, username),
+    )
+    if not row:
+        return None
+    return {
+        "id": str(row["id"]),
+        "tenant_id": tenant_id,
+        "username": row["username"],
+        "role": row["role"],
+        "person_name": row["person_name"],
+        "password_salt": row["password_salt"],
+        "password_iterations": row["password_iterations"],
+        "password_hash": row["password_hash"],
+        "is_active": bool(int(row["is_active"])),
+    }
 
-def save_state(state: Dict) -> None:
-    save_json(STATE_FILE, state)
+def authenticate(username: str, password: str) -> Tuple[bool, Optional[Dict[str, Any]], str]:
+    """
+    Backward compatible: uses DEFAULT_TENANT_CODE.
+    Your UI can keep calling authenticate(username,password) for now.
+    """
+    return authenticate_tenant(DEFAULT_TENANT_CODE, username, password)
 
-def load_audits() -> Dict:
-    ensure_seed_files()
-    data = load_json(AUDITS_FILE, {"audits": []})
-    data.setdefault("audits", [])
-    return data
+def authenticate_tenant(tenant_code: str, username: str, password: str) -> Tuple[bool, Optional[Dict[str, Any]], str]:
+    """
+    Tenant-aware authentication for SaaS.
+    Use this when you add a Tenant Code field in UI.
+    """
+    tenant_code = _normalize_text(tenant_code).lower() or DEFAULT_TENANT_CODE
+    tenant_id = ensure_seed_files(tenant_code)
 
-def save_audits(data: Dict) -> None:
-    save_json(AUDITS_FILE, data)
-
-def load_users() -> Dict:
-    ensure_seed_files()
-    data = load_json(USERS_FILE, {"users": []})
-    data.setdefault("users", [])
-    return data
-
-def find_user(username: str) -> Optional[Dict]:
-    for u in load_users().get("users", []):
-        if str(u.get("username", "")).lower() == str(username).lower():
-            return u
-    return None
-
-# -----------------------------
-# RBAC auth
-# -----------------------------
-def authenticate(username: str, password: str) -> Tuple[bool, Optional[Dict], str]:
-    ensure_seed_files()
-    u = find_user(username)
+    u = find_user(username, tenant_id=tenant_id)
     if not u:
         return False, None, "Invalid username or password."
-    if not verify_password(password, u.get("password", {})):
-        return False, None, "Invalid username or password."
-    return True, u, "Login successful."
+    if not u.get("is_active", True):
+        return False, None, "User is disabled."
 
-# -----------------------------
-# Eligibility / assignment rules
-# -----------------------------
-def is_busy(state: Dict, person_name: str) -> bool:
+    ok = _verify_password_columns(
+        password=password,
+        salt_hex=u.get("password_salt"),
+        iterations=u.get("password_iterations"),
+        hash_hex=u.get("password_hash"),
+    )
+    if not ok:
+        return False, None, "Invalid username or password."
+
+    user = {
+        "id": u["id"],
+        "tenant_id": tenant_id,
+        "tenant_code": tenant_code,
+        "username": u["username"],
+        "role": u["role"],
+        "person_name": u["person_name"],
+    }
+    return True, user, "Login successful."
+
+
+# ============================================================
+# Password change (tenant-aware)  <<< ADDED FEATURE
+# ============================================================
+def change_password(
+    username: str,
+    old_password: str,
+    new_password: str,
+    *,
+    tenant_id: Optional[str] = None,
+) -> Tuple[bool, str]:
+    """
+    Change password for the currently logged-in user.
+    Verifies old password, then updates password_salt/iterations/hash in DB.
+    Works for admin/manager/auditor.
+    """
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+
+    username = _normalize_text(username).lower()
+    if not username:
+        return False, "Username is required."
+    if not old_password:
+        return False, "Current password is required."
+    if not new_password or len(new_password) < 6:
+        return False, "New password must be at least 6 characters."
+
+    u = find_user(username, tenant_id=tenant_id)
+    if not u:
+        return False, "User not found."
+    if not u.get("is_active", True):
+        return False, "User is disabled."
+
+    ok_old = _verify_password_columns(
+        password=old_password,
+        salt_hex=u.get("password_salt"),
+        iterations=u.get("password_iterations"),
+        hash_hex=u.get("password_hash"),
+    )
+    if not ok_old:
+        return False, "Current password is incorrect."
+
+    pw = make_password_record(new_password)
+
+    _execute(
+        """
+        update users
+        set password_salt = ?, password_iterations = ?, password_hash = ?
+        where tenant_id = ? and lower(username) = ?;
+        """,
+        (pw["salt"], int(pw["iterations"]), pw["hash"], tenant_id, username),
+    )
+
+    return True, "Password updated successfully."
+
+
+def admin_reset_password(
+    target_username: str,
+    new_password: str,
+    *,
+    tenant_id: Optional[str] = None,
+) -> Tuple[bool, str]:
+    """
+    Admin-only helper (UI should restrict this to admin role).
+    Resets another user's password inside the same tenant.
+    """
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+
+    target_username = _normalize_text(target_username).lower()
+    if not target_username:
+        return False, "Target username is required."
+    if not new_password or len(new_password) < 6:
+        return False, "New password must be at least 6 characters."
+
+    u = find_user(target_username, tenant_id=tenant_id)
+    if not u:
+        return False, "User not found."
+
+    pw = make_password_record(new_password)
+
+    _execute(
+        """
+        update users
+        set password_salt = ?, password_iterations = ?, password_hash = ?
+        where tenant_id = ? and lower(username) = ?;
+        """,
+        (pw["salt"], int(pw["iterations"]), pw["hash"], tenant_id, target_username),
+    )
+
+    return True, f"Password reset successfully for '{target_username}'."
+
+
+# ============================================================
+# State (busy auditors, audit_history) (tenant-aware)
+# ============================================================
+def load_state(tenant_id: Optional[str] = None) -> Dict[str, Any]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    _ensure_state_row(tenant_id)
+    row = _fetch_one(
+        "select busy_by_name_json, audit_history_json from audit_state where tenant_id = ?;",
+        (tenant_id,),
+    )
+    busy = json.loads(row["busy_by_name_json"] or "{}") if row else {}
+    hist = json.loads(row["audit_history_json"] or "[]") if row else []
+    return {"busy_by_name": busy, "audit_history": hist}
+
+def save_state(state: Dict[str, Any], tenant_id: Optional[str] = None) -> None:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    _ensure_state_row(tenant_id)
+    busy_json = json.dumps(state.get("busy_by_name", {}) or {})
+    hist_json = json.dumps(state.get("audit_history", []) or [])
+    _execute(
+        """
+        update audit_state
+        set busy_by_name_json = ?, audit_history_json = ?
+        where tenant_id = ?;
+        """,
+        (busy_json, hist_json, tenant_id),
+    )
+
+
+# ============================================================
+# Eligibility / assignment rules (tenant-aware)
+# ============================================================
+def is_busy(state: Dict[str, Any], person_name: str) -> bool:
     return person_name in state.get("busy_by_name", {})
 
 def has_all_required_skills(person: Person, required_skills: Set[str]) -> bool:
@@ -648,7 +1127,7 @@ def has_all_required_skills(person: Person, required_skills: Set[str]) -> bool:
 
 def eligible_people(
     people: List[Person],
-    state: Dict,
+    state: Dict[str, Any],
     target_dept: str,
     required_skills: Set[str],
     level: str,
@@ -669,7 +1148,7 @@ def eligible_people(
 def _new_audit_id() -> str:
     return str(uuid.uuid4())
 
-def lock_auditor(state: Dict, auditor_name: str, audit_id: str, target_dept: str, required_skills: Set[str], level: str) -> None:
+def lock_auditor(state: Dict[str, Any], auditor_name: str, audit_id: str, target_dept: str, required_skills: Set[str], level: str) -> None:
     state["busy_by_name"][auditor_name] = {
         "audit_id": audit_id,
         "audited_department": target_dept,
@@ -679,31 +1158,158 @@ def lock_auditor(state: Dict, auditor_name: str, audit_id: str, target_dept: str
         "status": "ongoing",
     }
 
-def unlock_auditor(state: Dict, auditor_name: str) -> None:
+def unlock_auditor(state: Dict[str, Any], auditor_name: str) -> None:
     if auditor_name in state.get("busy_by_name", {}):
         del state["busy_by_name"][auditor_name]
 
-# -----------------------------
-# Audit record management
-# -----------------------------
-def list_audits() -> List[Dict]:
-    return load_audits().get("audits", [])
 
-def get_audit(audit_id: str) -> Optional[Dict]:
-    for a in list_audits():
-        if a.get("audit_id") == audit_id:
-            return a
-    return None
+# ============================================================
+# Audits (tenant-aware)
+# ============================================================
+def load_audits(tenant_id: Optional[str] = None) -> Dict[str, Any]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    rows = _fetch_all(
+        "select * from audits where tenant_id = ? order by created_at desc;",
+        (tenant_id,),
+    )
+    audits: List[Dict[str, Any]] = []
+    for r in rows:
+        audits.append(
+            {
+                "audit_id": r["audit_id"],
+                "title": r["title"] or "",
+                "scope": r["scope"] or "",
+                "audited_department": r["audited_department"],
+                "required_skills": json.loads(r["required_skills_json"] or "[]"),
+                "assigned_auditor": r["assigned_auditor"],
+                "auditor_level": r["auditor_level"],
+                "status": r["status"],
+                "created_by": r["created_by"],
+                "created_at": r["created_at"],
+                "due_date": r["due_date"] or "",
+                "reports": json.loads(r["reports_json"] or "[]"),
+                "report_submitted_at": r["report_submitted_at"] or "",
+                "closed_at": r["closed_at"] or "",
+                "checklists": json.loads(r["checklists_json"] or "{}"),
+            }
+        )
+    return {"audits": audits}
 
-def _save_updated_audit(updated: Dict) -> None:
-    data = load_audits()
-    audits = data.get("audits", [])
-    for i, a in enumerate(audits):
-        if a.get("audit_id") == updated.get("audit_id"):
-            audits[i] = updated
-            save_audits(data)
-            return
-    raise ValueError("Audit not found while saving.")
+def save_audits(data: Dict[str, Any], tenant_id: Optional[str] = None) -> None:
+    """
+    Kept for compatibility. Prefer updating individual audits with _save_updated_audit().
+    """
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    # This function is not used in the new flow, but kept to avoid breaking imports.
+    # You can remove later.
+    for a in data.get("audits", []):
+        _save_updated_audit(a, tenant_id=tenant_id)
+
+def list_audits(tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    return load_audits(tenant_id=tenant_id).get("audits", [])
+
+def get_audit(audit_id: str, tenant_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    r = _fetch_one(
+        "select * from audits where tenant_id = ? and audit_id = ? limit 1;",
+        (tenant_id, audit_id),
+    )
+    if not r:
+        return None
+    return {
+        "audit_id": r["audit_id"],
+        "title": r["title"] or "",
+        "scope": r["scope"] or "",
+        "audited_department": r["audited_department"],
+        "required_skills": json.loads(r["required_skills_json"] or "[]"),
+        "assigned_auditor": r["assigned_auditor"],
+        "auditor_level": r["auditor_level"],
+        "status": r["status"],
+        "created_by": r["created_by"],
+        "created_at": r["created_at"],
+        "due_date": r["due_date"] or "",
+        "reports": json.loads(r["reports_json"] or "[]"),
+        "report_submitted_at": r["report_submitted_at"] or "",
+        "closed_at": r["closed_at"] or "",
+        "checklists": json.loads(r["checklists_json"] or "{}"),
+    }
+
+def _save_updated_audit(updated: Dict[str, Any], tenant_id: Optional[str] = None) -> None:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+
+    required_skills_json = json.dumps(updated.get("required_skills", []) or [])
+    reports_json = json.dumps(updated.get("reports", []) or [])
+    checklists_json = json.dumps(updated.get("checklists", {}) or {})
+
+    exists = _fetch_one("select audit_id from audits where audit_id = ?;", (updated.get("audit_id"),))
+    if exists:
+        _execute(
+            """
+            update audits set
+              title = ?,
+              scope = ?,
+              audited_department = ?,
+              required_skills_json = ?,
+              assigned_auditor = ?,
+              auditor_level = ?,
+              status = ?,
+              created_by = ?,
+              created_at = ?,
+              due_date = ?,
+              reports_json = ?,
+              report_submitted_at = ?,
+              closed_at = ?,
+              checklists_json = ?
+            where audit_id = ? and tenant_id = ?;
+            """,
+            (
+                updated.get("title", ""),
+                updated.get("scope", ""),
+                updated.get("audited_department", ""),
+                required_skills_json,
+                updated.get("assigned_auditor", ""),
+                updated.get("auditor_level", ""),
+                updated.get("status", ""),
+                updated.get("created_by", ""),
+                updated.get("created_at", _now_iso()),
+                updated.get("due_date", ""),
+                reports_json,
+                updated.get("report_submitted_at", ""),
+                updated.get("closed_at", ""),
+                checklists_json,
+                updated.get("audit_id", ""),
+                tenant_id,
+            ),
+        )
+        return
+
+    _execute(
+        """
+        insert into audits
+        (audit_id, tenant_id, title, scope, audited_department, required_skills_json,
+         assigned_auditor, auditor_level, status, created_by, created_at, due_date,
+         reports_json, report_submitted_at, closed_at, checklists_json)
+        values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """,
+        (
+            updated.get("audit_id", _new_audit_id()),
+            tenant_id,
+            updated.get("title", ""),
+            updated.get("scope", ""),
+            updated.get("audited_department", ""),
+            required_skills_json,
+            updated.get("assigned_auditor", ""),
+            updated.get("auditor_level", ""),
+            updated.get("status", "Assigned"),
+            updated.get("created_by", ""),
+            updated.get("created_at", _now_iso()),
+            updated.get("due_date", ""),
+            reports_json,
+            updated.get("report_submitted_at", ""),
+            updated.get("closed_at", ""),
+            checklists_json,
+        ),
+    )
 
 def create_and_assign_audit(
     created_by: str,
@@ -714,30 +1320,30 @@ def create_and_assign_audit(
     due_date: str = "",
     required_skill_keys_override: Optional[Set[str]] = None,
     save_required_skills_as_default: bool = False,
-) -> Tuple[Optional[Dict], str]:
-    ensure_seed_files()
+    tenant_id: Optional[str] = None,
+) -> Tuple[Optional[Dict[str, Any]], str]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
 
     target_dept = _normalize_text(target_dept)
     if not target_dept:
         return None, "Department is required."
 
-    add_department_to_catalog(target_dept)
+    add_department_to_catalog(target_dept, tenant_id=tenant_id)
 
     if required_skill_keys_override is not None:
         required_skills = set(str(k).strip().lower() for k in required_skill_keys_override if str(k).strip())
         for k in list(required_skills):
-            ensure_skill_key_exists(k, fallback_label=k)
+            ensure_skill_key_exists(k, fallback_label=k, tenant_id=tenant_id)
         if save_required_skills_as_default:
-            set_dept_required_skills(target_dept, sorted(required_skills))
+            set_dept_required_skills(target_dept, sorted(required_skills), tenant_id=tenant_id)
     else:
-        required_skills = get_required_skills_for_dept(target_dept)
+        required_skills = get_required_skills_for_dept(target_dept, tenant_id=tenant_id)
 
     if not required_skills and target_dept.lower() != "mr":
         return None, "No required skills defined for this department. Enter required skills (or save them as default)."
 
-    people = load_people()
-    state = load_state()
-    audits_data = load_audits()
+    people = load_people(tenant_id=tenant_id)
+    state = load_state(tenant_id=tenant_id)
 
     experienced = eligible_people(people, state, target_dept, required_skills, level="experienced")
     chosen: Optional[Person] = None
@@ -769,24 +1375,23 @@ def create_and_assign_audit(
         "reports": [],
         "report_submitted_at": "",
         "closed_at": "",
-        # checklist responses stored here:
-        "checklists": {},  # { dept: { section: [ {sr_no, checklist, observation, evidence}, ... ] } }
+        "checklists": {},
     }
 
-    audits_data["audits"].append(audit)
-    save_audits(audits_data)
+    _save_updated_audit(audit, tenant_id=tenant_id)
 
     lock_auditor(state, chosen.name, audit_id, target_dept, required_skills, chosen.level)
-    save_state(state)
+    save_state(state, tenant_id=tenant_id)
 
     return audit, f"Assigned {chosen.name} to audit '{target_dept}'."
 
-def set_audit_status(audit_id: str, new_status: str) -> Tuple[bool, str]:
-    a = get_audit(audit_id)
+def set_audit_status(audit_id: str, new_status: str, tenant_id: Optional[str] = None) -> Tuple[bool, str]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    a = get_audit(audit_id, tenant_id=tenant_id)
     if not a:
         return False, "Audit not found."
     a["status"] = new_status
-    _save_updated_audit(a)
+    _save_updated_audit(a, tenant_id=tenant_id)
     return True, "Status updated."
 
 def save_report_file(
@@ -794,11 +1399,12 @@ def save_report_file(
     uploaded_by: str,
     original_filename: str,
     file_bytes: bytes,
+    tenant_id: Optional[str] = None,
 ) -> Tuple[bool, str]:
-    ensure_seed_files()
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
     ensure_dirs()
 
-    a = get_audit(audit_id)
+    a = get_audit(audit_id, tenant_id=tenant_id)
     if not a:
         return False, "Audit not found."
 
@@ -807,7 +1413,9 @@ def save_report_file(
     if ext not in allowed:
         return False, "Invalid file type. Allowed: PDF, XLSX/XLS, CSV."
 
-    audit_folder = os.path.join(UPLOADS_DIR, f"audit_{audit_id}")
+    tenant_code = get_tenant_code_from_id(tenant_id)
+
+    audit_folder = os.path.join(UPLOADS_DIR, tenant_code, f"audit_{audit_id}")
     os.makedirs(audit_folder, exist_ok=True)
 
     safe_name = original_filename.replace("\\", "_").replace("/", "_")
@@ -828,11 +1436,12 @@ def save_report_file(
     if a["status"] == "Assigned":
         a["status"] = "In Progress"
 
-    _save_updated_audit(a)
+    _save_updated_audit(a, tenant_id=tenant_id)
     return True, "Report uploaded successfully."
 
-def submit_report(audit_id: str, auditor_name: str) -> Tuple[bool, str]:
-    a = get_audit(audit_id)
+def submit_report(audit_id: str, auditor_name: str, tenant_id: Optional[str] = None) -> Tuple[bool, str]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    a = get_audit(audit_id, tenant_id=tenant_id)
     if not a:
         return False, "Audit not found."
     if a.get("assigned_auditor") != auditor_name:
@@ -842,11 +1451,12 @@ def submit_report(audit_id: str, auditor_name: str) -> Tuple[bool, str]:
 
     a["status"] = "Report Submitted"
     a["report_submitted_at"] = _now_iso()
-    _save_updated_audit(a)
+    _save_updated_audit(a, tenant_id=tenant_id)
     return True, "Report submitted."
 
-def complete_audit(audit_id: str, auditor_name: str) -> Tuple[bool, str]:
-    a = get_audit(audit_id)
+def complete_audit(audit_id: str, auditor_name: str, tenant_id: Optional[str] = None) -> Tuple[bool, str]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    a = get_audit(audit_id, tenant_id=tenant_id)
     if not a:
         return False, "Audit not found."
     if a.get("assigned_auditor") != auditor_name:
@@ -858,9 +1468,9 @@ def complete_audit(audit_id: str, auditor_name: str) -> Tuple[bool, str]:
 
     a["status"] = "Closed"
     a["closed_at"] = _now_iso()
-    _save_updated_audit(a)
+    _save_updated_audit(a, tenant_id=tenant_id)
 
-    state = load_state()
+    state = load_state(tenant_id=tenant_id)
     unlock_auditor(state, auditor_name)
     state["audit_history"].append(
         {
@@ -872,24 +1482,27 @@ def complete_audit(audit_id: str, auditor_name: str) -> Tuple[bool, str]:
             "status": "completed",
         }
     )
-    save_state(state)
+    save_state(state, tenant_id=tenant_id)
 
     return True, "Audit completed and auditor unlocked."
 
-# -----------------------------
-# Checklist responses (stored per audit inside audits.json)
-# -----------------------------
-def save_audit_section_table(audit_id: str, dept: str, section: str, rows: List[Dict[str, str]]) -> Tuple[bool, str]:
-    """
-    rows: list of dicts with keys: sr_no, checklist, observation, evidence
-    Stored into: audit["checklists"][dept][section] = rows
-    """
+# ============================================================
+# Checklist responses (stored per audit in audits table JSON)
+# ============================================================
+def save_audit_section_table(
+    audit_id: str,
+    dept: str,
+    section: str,
+    rows: List[Dict[str, str]],
+    tenant_id: Optional[str] = None
+) -> Tuple[bool, str]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
     dept = _normalize_text(dept)
     section = _normalize_text(section)
     if not audit_id or not dept or not section:
         return False, "audit_id, dept, and section are required."
 
-    a = get_audit(audit_id)
+    a = get_audit(audit_id, tenant_id=tenant_id)
     if not a:
         return False, "Audit not found."
 
@@ -898,32 +1511,36 @@ def save_audit_section_table(audit_id: str, dept: str, section: str, rows: List[
         a["checklists"][dept] = {}
     a["checklists"][dept][section] = rows
 
-    _save_updated_audit(a)
+    _save_updated_audit(a, tenant_id=tenant_id)
     return True, "Checklist saved."
 
-def load_audit_section_table(audit_id: str, dept: str, section: str) -> Optional[List[Dict[str, str]]]:
+def load_audit_section_table(
+    audit_id: str,
+    dept: str,
+    section: str,
+    tenant_id: Optional[str] = None
+) -> Optional[List[Dict[str, str]]]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
     dept = _normalize_text(dept)
     section = _normalize_text(section)
-    a = get_audit(audit_id)
+    a = get_audit(audit_id, tenant_id=tenant_id)
     if not a:
         return None
     return a.get("checklists", {}).get(dept, {}).get(section)
 
-# -----------------------------
-# Admin: people + users management
-# -----------------------------
-def list_people_records() -> List[Dict]:
-    ensure_seed_files()
-    return load_json(PEOPLE_FILE, [])
 
+# ============================================================
+# Admin: add/delete auditors (tenant-aware)
+# ============================================================
 def add_auditor(
     name: str,
     department: str,
     level: str,
     skills: Set[str],
     password: str = "auditor123",
+    tenant_id: Optional[str] = None,
 ) -> Tuple[bool, str]:
-    ensure_seed_files()
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
 
     name = _normalize_text(name)
     department = _normalize_text(department)
@@ -938,190 +1555,95 @@ def add_auditor(
     if not skills:
         return False, "At least one skill is required."
 
-    add_department_to_catalog(department)
+    add_department_to_catalog(department, tenant_id=tenant_id)
 
     cleaned_skills: Set[str] = set()
     for k in skills:
         kk = str(k).strip().lower()
         if not kk:
             continue
-        kk = ensure_skill_key_exists(kk, fallback_label=kk)
+        kk = ensure_skill_key_exists(kk, fallback_label=kk, tenant_id=tenant_id)
         cleaned_skills.add(kk)
 
     if not cleaned_skills:
         return False, "At least one valid skill is required."
 
-    people_raw = load_json(PEOPLE_FILE, [])
-    if any(_normalize_text(p.get("name", "")).lower() == name.lower() for p in people_raw):
+    existing_person = _fetch_one(
+        "select name from people where tenant_id = ? and lower(name) = ? limit 1;",
+        (tenant_id, name.lower()),
+    )
+    if existing_person:
         return False, "Auditor with this name already exists."
 
-    people_raw.append(
-        {
-            "name": name,
-            "department": department,
-            "skills": sorted(cleaned_skills),
-            "level": level,
-        }
+    _execute(
+        """
+        insert into people (id, tenant_id, name, department, level, is_active, created_at)
+        values (?, ?, ?, ?, ?, 1, ?);
+        """,
+        (_uuid(), tenant_id, name, department, level, _now_iso()),
     )
-    save_json(PEOPLE_FILE, people_raw)
 
-    users_data = load_users()
+    for kk in sorted(cleaned_skills):
+        _execute(
+            """
+            insert or ignore into person_skills (id, tenant_id, person_name, skill_key)
+            values (?, ?, ?, ?);
+            """,
+            (_uuid(), tenant_id, name, kk),
+        )
+
+    # create login for auditor (if missing)
     uname = _normalize_username(name)
-
-    if any(str(u.get("username", "")).lower() == uname.lower() for u in users_data.get("users", [])):
+    user_exists = _fetch_one(
+        "select id from users where tenant_id = ? and lower(username) = ? limit 1;",
+        (tenant_id, uname.lower()),
+    )
+    if user_exists:
         return True, f"Auditor added. Login already existed for username '{uname}'."
 
-    users_data["users"].append(
-        {
-            "username": uname,
-            "role": "auditor",
-            "person_name": name,
-            "password": make_password_record(password),
-            "created_at": _now_iso(),
-        }
+    pw = make_password_record(password)
+    _execute(
+        """
+        insert into users
+        (id, tenant_id, username, role, person_name, password_salt, password_iterations, password_hash, is_active, created_at)
+        values (?, ?, ?, 'auditor', ?, ?, ?, ?, 1, ?);
+        """,
+        (_uuid(), tenant_id, uname, name, pw["salt"], int(pw["iterations"]), pw["hash"], _now_iso()),
     )
-    save_json(USERS_FILE, users_data)
 
     return True, f"Auditor added successfully. Username: {uname} | Password: {password}"
 
-def delete_auditor(name: str) -> Tuple[bool, str]:
-    ensure_seed_files()
+def delete_auditor(name: str, tenant_id: Optional[str] = None) -> Tuple[bool, str]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
     name = _normalize_text(name)
     if not name:
         return False, "Name is required."
 
-    state = load_state()
+    state = load_state(tenant_id=tenant_id)
     if is_busy(state, name):
         return False, "Cannot delete. Auditor is locked in an ongoing audit."
 
-    people_raw = load_json(PEOPLE_FILE, [])
-    new_people = [p for p in people_raw if _normalize_text(p.get("name", "")).lower() != name.lower()]
-    if len(new_people) == len(people_raw):
-        return False, "Auditor not found."
-    save_json(PEOPLE_FILE, new_people)
-
-    users_data = load_users()
-    users_data["users"] = [
-        u for u in users_data.get("users", [])
-        if not (u.get("role") == "auditor" and _normalize_text(u.get("person_name", "")).lower() == name.lower())
-    ]
-    save_json(USERS_FILE, users_data)
-
-    return True, "Auditor deleted successfully (people.json and users.json updated)."
-
-# -----------------------------
-# NEW FEATURE: Supabase/Postgres authentication (optional)
-# Does NOT change existing JSON-based auth.
-# -----------------------------
-def _verify_password_columns(password: str, salt_hex: str, iterations: int, hash_hex: str) -> bool:
-    """
-    Verify password when stored in DB as 3 columns:
-    password_salt (hex), password_iterations (int), password_hash (hex)
-    """
-    if not salt_hex or not hash_hex:
-        return False
-    try:
-        iterations = int(iterations)
-    except Exception:
-        return False
-
-    got = _pbkdf2_hash(password, salt_hex, iterations)
-    return hmac.compare_digest(got, hash_hex)
-
-
-def authenticate_db(tenant_code: str, username: str, password: str) -> Tuple[bool, Optional[Dict], str]:
-    """
-    Authenticate against Supabase Postgres.
-
-    Required ENV variable:
-      DATABASE_URL = your Postgres connection string
-
-    Returns:
-      (ok, user_dict, message)
-    where user_dict contains: id, tenant_id, username, role, person_name
-    """
-    import os
-
-    db_url = os.getenv("DATABASE_URL", "").strip()
-    if not db_url:
-        return False, None, "DATABASE_URL is not set in environment variables."
-
-    tenant_code = _normalize_text(tenant_code).lower()
-    username = _normalize_text(username).lower()
-
-    if not tenant_code or not username or not password:
-        return False, None, "Tenant code, username, and password are required."
-
-    # Lazy import so your app still runs even if psycopg is not installed yet.
-    try:
-        import psycopg2
-        import psycopg2.extras
-    except Exception:
-        return False, None, "Missing dependency: install psycopg2-binary."
-
-    sql = """
-    select
-      u.id,
-      u.tenant_id,
-      u.username,
-      u.role,
-      u.person_name,
-      u.password_salt,
-      u.password_iterations,
-      u.password_hash
-    from users u
-    join tenants t on t.id = u.tenant_id
-    where t.tenant_code = %s
-      and lower(u.username) = %s
-    limit 1;
-    """
-
-    try:
-        conn = psycopg2.connect(db_url)
-        try:
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute(sql, (tenant_code, username))
-                row = cur.fetchone()
-        finally:
-            conn.close()
-    except Exception as e:
-        return False, None, f"DB connection/query failed: {e}"
-
-    if not row:
-        return False, None, "Invalid username or password."
-
-    ok = _verify_password_columns(
-        password=password,
-        salt_hex=row.get("password_salt"),
-        iterations=row.get("password_iterations"),
-        hash_hex=row.get("password_hash"),
+    person_exists = _fetch_one(
+        "select name from people where tenant_id = ? and lower(name) = ? limit 1;",
+        (tenant_id, name.lower()),
     )
-    if not ok:
-        return False, None, "Invalid username or password."
+    if not person_exists:
+        return False, "Auditor not found."
 
-    user = {
-        "id": str(row.get("id")),
-        "tenant_id": str(row.get("tenant_id")),
-        "username": row.get("username"),
-        "role": row.get("role"),
-        "person_name": row.get("person_name"),
-    }
-    return True, user, "Login successful (DB)."
+    _execute("delete from person_skills where tenant_id = ? and lower(person_name) = ?;", (tenant_id, name.lower()))
+    _execute("delete from people where tenant_id = ? and lower(name) = ?;", (tenant_id, name.lower()))
 
-# -----------------------------
-# UI helper: show Audit Title instead of Audit ID (non-breaking, add-only)
-# Keeps using audit_id internally for traceability
-# -----------------------------
+    _execute(
+        "delete from users where tenant_id = ? and role = 'auditor' and lower(person_name) = ?;",
+        (tenant_id, name.lower()),
+    )
 
+    return True, "Auditor deleted successfully."
+
+# ============================================================
+# UI helper: show Audit Title instead of Audit ID (tenant-aware)
+# ============================================================
 def _build_audit_display_title(a: Dict[str, Any]) -> str:
-    """
-    Returns a human-readable label for UI dropdowns.
-
-    Priority:
-    1) a["title"] if present
-    2) a["audit_title"] (backward/alternate key if ever used)
-    3) fallback: "<department> | <audit_id_prefix>"
-    """
     title = _normalize_text(a.get("title", ""))
     if not title:
         title = _normalize_text(a.get("audit_title", ""))
@@ -1131,7 +1653,6 @@ def _build_audit_display_title(a: Dict[str, Any]) -> str:
     due = _normalize_text(a.get("due_date", ""))
     auditor = _normalize_text(a.get("assigned_auditor", ""))
 
-    # Base label
     if title:
         label = title
     else:
@@ -1139,7 +1660,6 @@ def _build_audit_display_title(a: Dict[str, Any]) -> str:
         prefix = aid[:8] if aid else "unknown"
         label = f"{dept or 'Audit'} | {prefix}"
 
-    # Enrich label slightly (still compact)
     extras: List[str] = []
     if dept and (dept.lower() not in label.lower()):
         extras.append(dept)
@@ -1154,17 +1674,9 @@ def _build_audit_display_title(a: Dict[str, Any]) -> str:
         return f"{label}  ({' | '.join(extras)})"
     return label
 
-
-def get_audit_dropdown_options() -> Tuple[List[str], Dict[str, str]]:
-    """
-    Returns:
-      labels: list of labels to show in UI
-      label_to_id: mapping label -> audit_id
-
-    This is safe even if some audits have blank titles.
-    Ensures labels are unique (adds suffix when duplicates occur).
-    """
-    audits = list_audits()
+def get_audit_dropdown_options(tenant_id: Optional[str] = None) -> Tuple[List[str], Dict[str, str]]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    audits = list_audits(tenant_id=tenant_id)
 
     labels: List[str] = []
     label_to_id: Dict[str, str] = {}
@@ -1178,7 +1690,6 @@ def get_audit_dropdown_options() -> Tuple[List[str], Dict[str, str]]:
         base = _build_audit_display_title(a)
         key = base
 
-        # Ensure uniqueness in dropdown
         if key in seen:
             seen[key] += 1
             key = f"{base} [{seen[base]}]"
@@ -1188,6 +1699,5 @@ def get_audit_dropdown_options() -> Tuple[List[str], Dict[str, str]]:
         labels.append(key)
         label_to_id[key] = audit_id
 
-    # Sort labels nicely
     labels.sort(key=lambda x: x.lower())
     return labels, label_to_id

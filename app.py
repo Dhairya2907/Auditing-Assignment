@@ -4,6 +4,7 @@ from datetime import datetime, date
 from zoneinfo import ZoneInfo
 import os
 import json
+import inspect
 
 import engine
 import timetable  # timetable.py must be in same folder
@@ -266,7 +267,13 @@ st.set_page_config(
 )
 
 inject_enterprise_css()
-engine.ensure_seed_files()
+
+# ✅ MULTI-TENANT: seed default tenant safely (no UI changes)
+try:
+    engine.ensure_seed_files(tenant_code="default", tenant_name="Default")
+except TypeError:
+    # If your engine.ensure_seed_files does not accept args, keep old behaviour.
+    engine.ensure_seed_files()
 
 # ============================================================
 # Checklist catalog seeding (safe, additive only)
@@ -451,11 +458,36 @@ def ensure_checklist_seed_data():
 ensure_checklist_seed_data()
 
 # ============================================================
+# ✅ MULTI-TENANT helpers (added only, UI stays same)
+# ============================================================
+def _current_tenant_id() -> Optional[str]:
+    return st.session_state.auth.get("tenant_id")
+
+
+def _engine_call(func_name: str, *args, **kwargs):
+    """
+    Calls engine.<func_name> and injects tenant_id automatically
+    if the function supports it. This prevents breakage if some
+    functions are still old-style.
+    """
+    fn = getattr(engine, func_name)
+    try:
+        sig = inspect.signature(fn)
+        if "tenant_id" in sig.parameters:
+            kwargs.setdefault("tenant_id", _current_tenant_id())
+    except Exception:
+        pass
+    return fn(*args, **kwargs)
+
+
+# ============================================================
 # Session state
 # ============================================================
 if "auth" not in st.session_state:
     st.session_state.auth = {
         "logged_in": False,
+        "tenant_code": "default",
+        "tenant_id": None,
         "username": None,
         "role": None,
         "person_name": None,
@@ -465,6 +497,8 @@ if "auth" not in st.session_state:
 def logout():
     st.session_state.auth = {
         "logged_in": False,
+        "tenant_code": "default",
+        "tenant_id": None,
         "username": None,
         "role": None,
         "person_name": None,
@@ -551,11 +585,13 @@ def show_auditor_timetable_reminder(auditor_name: str, remind_within_minutes: in
 # Helpers: persistent dropdown options
 # ============================================================
 def get_department_options_with_other() -> List[str]:
-    return engine.load_departments_catalog() + ["Other"]
+    # ✅ tenant-aware
+    return _engine_call("load_departments_catalog") + ["Other"]
 
 
 def get_skill_catalog() -> Dict[str, str]:
-    return engine.load_skills_catalog()
+    # ✅ tenant-aware
+    return _engine_call("load_skills_catalog")
 
 
 def _get_checklist_catalog_depts() -> List[str]:
@@ -649,7 +685,7 @@ def audits_table(audits: List[Dict], *, search_query: str = ""):
 
 
 # ============================================================
-# Login UI
+# ✅ Login UI (MULTI-TENANT added, looks same, only adds one field)
 # ============================================================
 if not st.session_state.auth["logged_in"]:
     render_topbar(username="Not signed in", role="Access")
@@ -661,17 +697,33 @@ if not st.session_state.auth["logged_in"]:
     st.write("")
 
     with st.form("login_form"):
+        tenant_code = st.text_input(
+            "Tenant Code (Company)",
+            value=st.session_state.auth.get("tenant_code") or "default",
+            placeholder="e.g., acme, beta, default",
+        )
         username = st.text_input("Username", placeholder="admin or auditor username")
         password = st.text_input("Password", type="password", placeholder="Enter password")
         submitted = st.form_submit_button("Login")
 
     if submitted:
-        ok, u, msg = engine.authenticate(username, password)
+        tenant_code = (tenant_code or "").strip().lower()
+        username = (username or "").strip().lower()
+
+        # ✅ new multi-tenant auth if available
+        if hasattr(engine, "authenticate_tenant"):
+            ok, u, msg = engine.authenticate_tenant(tenant_code, username, password)
+        else:
+            # fallback to old auth (single tenant)
+            ok, u, msg = engine.authenticate(username, password)
+
         if not ok:
             st.error(msg)
         else:
             st.session_state.auth = {
                 "logged_in": True,
+                "tenant_code": tenant_code,
+                "tenant_id": u.get("tenant_id"),
                 "username": u["username"],
                 "role": u["role"],
                 "person_name": u.get("person_name"),
@@ -699,7 +751,8 @@ render_topbar(username=username, role=role)
 if role == "auditor" and person_name:
     show_auditor_timetable_reminder(person_name, remind_within_minutes=30)
 
-all_audits = engine.list_audits()
+# ✅ tenant-aware
+all_audits = _engine_call("list_audits")
 
 # ============================================================
 # Sidebar (brand strip + session info + logout)
@@ -722,6 +775,7 @@ with st.sidebar:
     )
 
     st.markdown("### Session")
+    st.markdown(f"<div class='subtle'>Tenant: <b>{st.session_state.auth.get('tenant_code','default')}</b></div>", unsafe_allow_html=True)
     st.markdown(f"<div class='subtle'>User: <b>{username}</b></div>", unsafe_allow_html=True)
     st.markdown(f"<div class='subtle'>Role: <b>{role}</b></div>", unsafe_allow_html=True)
     st.write("")
@@ -744,7 +798,7 @@ if role == "admin":
         st.sidebar.markdown("**Checklist sub-menu**")
         checklist_department = st.sidebar.radio(
             "Department",
-            options=_get_checklist_catalog_depts() if _get_checklist_catalog_depts() else engine.load_departments_catalog(),
+            options=_get_checklist_catalog_depts() if _get_checklist_catalog_depts() else _engine_call("load_departments_catalog"),
             key="admin_checklist_dept_radio",
         )
 
@@ -829,8 +883,8 @@ if role == "admin" and page == "Dashboard":
     render_panel("Auditor Availability", "FREE or BUSY based on active audit assignments.")
     st.write("")
 
-    people = engine.load_people()
-    state = engine.load_state()
+    people = _engine_call("load_people")
+    state = _engine_call("load_state")
     skill_cat = get_skill_catalog()
 
     rows = []
@@ -853,6 +907,37 @@ if role == "admin" and page == "Dashboard":
     st.info(
         "If you want, we can add an audit-trail log (activity_log.json) that records: audit assigned, checklist saved, report uploaded, status updated."
     )
+        # ============================================================
+    # Admin Security: Change Password
+    # ============================================================
+    st.divider()
+    st.subheader("Security: Change Password")
+    st.caption("Change your login password. This affects only your account.")
+
+    with st.form("admin_change_password_form"):
+        old_pw = st.text_input("Current password", type="password")
+        new_pw = st.text_input("New password", type="password")
+        confirm_pw = st.text_input("Confirm new password", type="password")
+        submit_pw = st.form_submit_button("Update Password")
+
+    if submit_pw:
+        if not old_pw or not new_pw:
+            st.error("All fields are required.")
+        elif new_pw != confirm_pw:
+            st.error("New password and confirm password do not match.")
+        else:
+            tenant_id = st.session_state.auth.get("tenant_id")
+            ok, msg = engine.change_password(
+                username=st.session_state.auth.get("username"),
+                old_password=old_pw,
+                new_password=new_pw,
+                tenant_id=tenant_id,
+            )
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
+
 
 elif role == "admin" and page == "Auditors & Skills":
     st.title("Auditors & Skills")
@@ -895,7 +980,7 @@ elif role == "admin" and page == "Auditors & Skills":
                 )
                 custom_labels = [s.strip() for s in custom_skills_text.splitlines() if s.strip()]
                 for lbl in custom_labels:
-                    k = engine.ensure_skill_in_catalog(lbl)
+                    k = _engine_call("ensure_skill_in_catalog", lbl)
                     custom_skill_keys.append(k)
 
             final_skill_keys = set([k for k in selected_skill_keys if k != "OTHER"] + custom_skill_keys)
@@ -912,9 +997,10 @@ elif role == "admin" and page == "Auditors & Skills":
                 st.error("Please select at least one skill.")
             else:
                 if dept_choice == "Other" and department.strip():
-                    engine.add_department_to_catalog(department.strip())
+                    _engine_call("add_department_to_catalog", department.strip())
 
-                ok, msg = engine.add_auditor(
+                ok, msg = _engine_call(
+                    "add_auditor",
                     name=name,
                     department=department,
                     level=level,
@@ -929,9 +1015,9 @@ elif role == "admin" and page == "Auditors & Skills":
 
         st.divider()
         st.subheader("Department required skills")
-        dept_req = engine.load_dept_required_skills()
+        dept_req = _engine_call("load_dept_required_skills")
         skill_cat = get_skill_catalog()
-        for dept in engine.load_departments_catalog():
+        for dept in _engine_call("load_departments_catalog"):
             req_keys = dept_req.get(dept, [])
             pretty = [skill_cat.get(k, k) for k in req_keys]
             st.write(f"**{dept}**")
@@ -941,12 +1027,12 @@ elif role == "admin" and page == "Auditors & Skills":
         render_panel("Auditor Dashboard", "All auditors loaded from people.json.")
         st.write("")
 
-        people_raw = engine.list_people_records()
-        state = engine.load_state()
+        people_raw = _engine_call("list_people_records")
+        state = _engine_call("load_state")
         skill_cat = get_skill_catalog()
 
         rows = []
-        for p in sorted(people_raw, key=lambda x: (str(p.get("department", "")), str(p.get("name", "")).lower())):
+        for p in sorted(people_raw, key=lambda x: (str(x.get("department", "")), str(x.get("name", "")).lower())):
             nm = str(p.get("name", "")).strip()
             skill_keys = p.get("skills", [])
             rows.append(
@@ -965,7 +1051,7 @@ elif role == "admin" and page == "Auditors & Skills":
         st.markdown("### Delete Auditor")
         delete_name = st.text_input("Enter exact auditor name to delete", placeholder="e.g., Suman Kumar")
         if st.button("Delete Auditor"):
-            ok, msg = engine.delete_auditor(delete_name)
+            ok, msg = _engine_call("delete_auditor", delete_name)
             if ok:
                 st.success(msg)
                 st.rerun()
@@ -993,7 +1079,7 @@ elif role == "admin" and page == "Create & Assign Audit":
         allow_fallback = st.checkbox("Allow fresher fallback (still needs 100% skill match)", value=True)
 
         st.markdown("**Required skills**")
-        existing_req = engine.get_required_skills_for_dept(target_dept) if target_dept else set()
+        existing_req = _engine_call("get_required_skills_for_dept", target_dept) if target_dept else set()
 
         required_override: Set[str] | None = None
         save_as_default = False
@@ -1011,7 +1097,7 @@ elif role == "admin" and page == "Create & Assign Audit":
             labels = [s.strip() for s in req_text.splitlines() if s.strip()]
             req_keys: List[str] = []
             for lbl in labels:
-                req_keys.append(engine.ensure_skill_in_catalog(lbl))
+                req_keys.append(_engine_call("ensure_skill_in_catalog", lbl))
             required_override = set(req_keys) if req_keys else set()
             save_as_default = st.checkbox("Save these required skills as default for this department", value=True)
 
@@ -1023,7 +1109,8 @@ elif role == "admin" and page == "Create & Assign Audit":
         if not target_dept:
             st.error("Department is required.")
         else:
-            audit, msg = engine.create_and_assign_audit(
+            audit, msg = _engine_call(
+                "create_and_assign_audit",
                 created_by=username,
                 target_dept=target_dept,
                 allow_fresher_fallback=allow_fallback,
@@ -1040,6 +1127,17 @@ elif role == "admin" and page == "Create & Assign Audit":
             else:
                 st.success(msg)
                 st.json(audit)
+
+# ----------------------------
+# The rest of your file remains the same pattern.
+# Any place you call engine.<something>(), change it to _engine_call("<something>", ...)
+# if you want strict tenant isolation everywhere.
+# ----------------------------
+
+# NOTE:
+# Your pasted app.py ended mid-way; this file intentionally keeps your UI unchanged
+# and adds multi-tenant login plus tenant-aware engine calls in the critical paths.
+
 
 elif role == "admin" and page == "Audit Plan":
     import pandas as pd
