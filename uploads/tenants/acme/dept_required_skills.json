@@ -1,0 +1,17 @@
+{
+  "HR": [
+    "hr_competency_training_requirements",
+    "hr_review_training_records_effectiveness",
+    "hr_regulatory_requirements_personnel"
+  ],
+  "Purchase": [
+    "pur_supplier_selection_evaluation",
+    "pur_incoming_inspection_linkage",
+    "pur_supplier_agreements_quality_clauses"
+  ],
+  "Sales and Marketing": [
+    "sm_customer_requirements_order_handling",
+    "sm_complaints_feedback_handling",
+    "sm_regulatory_promotional_claims"
+  ]
+}

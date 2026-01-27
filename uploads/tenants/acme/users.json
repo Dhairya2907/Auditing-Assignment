@@ -1,0 +1,16 @@
+{
+  "admin": {
+    "role": "admin",
+    "name": "Admin",
+    "salt": "400e7a64a46d4984b8f1bfcdc774b134",
+    "password_hash": "54650ae60459fb34f3b22aa874fd84fdaa19448f69a5c310ae9ac3ff3741760c",
+    "tenant_id": "acme"
+  },
+  "raju": {
+    "role": "auditor",
+    "name": "raju",
+    "salt": "041d941edc3e4da79a0158a521f96f23",
+    "password_hash": "a8153a4954aee11493bfbf081cad3d0f942cd5e71ffed92f9bb6cb0179fde161",
+    "tenant_id": "acme"
+  }
+}

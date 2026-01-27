@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import json
 import uuid
 import hashlib
@@ -98,6 +99,18 @@ def ensure_dirs() -> None:
 
 def _uuid() -> str:
     return str(uuid.uuid4())
+
+
+# ============================================================
+# Tenant upload folder helpers (used across modules)
+# ============================================================
+def _tenant_root_dir(tenant_id: str) -> str:
+    return os.path.join(UPLOADS_DIR, "tenants", str(tenant_id))
+
+def _tenant_generated_reports_dir(tenant_id: str) -> str:
+    d = os.path.join(_tenant_root_dir(tenant_id), "generated_reports")
+    os.makedirs(d, exist_ok=True)
+    return d
 
 
 # ============================================================
@@ -293,6 +306,26 @@ create table if not exists checklists_catalog (
   foreign key (tenant_id) references tenants(id) on delete cascade
 );
 create index if not exists idx_chk_tenant on checklists_catalog(tenant_id);
+
+-- ============================================================
+-- Final Generated Reports (multi-audit PDF)
+-- ============================================================
+create table if not exists generated_final_reports (
+  id text primary key,
+  tenant_id text not null,
+  created_by text not null,
+  created_at text not null,
+  summary text not null,
+  audit_ids_json text not null,
+  allowed_users_json text not null,
+  pdf_rel_path text not null,
+  is_deleted integer not null default 0,
+  deleted_at text,
+  deleted_by text,
+  foreign key (tenant_id) references tenants(id) on delete cascade
+);
+create index if not exists idx_finalreports_tenant on generated_final_reports(tenant_id);
+create index if not exists idx_finalreports_createdat on generated_final_reports(created_at);
 """
 
 def init_db() -> None:
@@ -496,6 +529,9 @@ def ensure_seed_files(tenant_code: str = "", tenant_name: str = "") -> str:
     tenant_code = _normalize_text(tenant_code).lower() or DEFAULT_TENANT_CODE
     tenant_id = ensure_tenant(tenant_code, tenant_name)
 
+    # ensure tenant upload folders exist (including final reports folder)
+    _tenant_generated_reports_dir(tenant_id)
+
     # seed departments
     for d in DEFAULT_DEPARTMENTS:
         add_department_to_catalog(d, tenant_id=tenant_id)
@@ -653,11 +689,6 @@ def ensure_skill_in_catalog(label: str, tenant_id: Optional[str] = None) -> str:
     if not label:
         raise ValueError("Skill label cannot be empty.")
 
-    row = _fetch_one(
-        "select skill_key, skill_label from skills_catalog where tenant_id = ?;",
-        (tenant_id,),
-    )
-    # quick scan: if label exists return its key
     rows = _fetch_all(
         "select skill_key, skill_label from skills_catalog where tenant_id = ?;",
         (tenant_id,),
@@ -691,7 +722,6 @@ def load_dept_required_skills(tenant_id: Optional[str] = None) -> Dict[str, List
         key = str(r["skill_key"]).strip().lower()
         out.setdefault(dept, []).append(key)
 
-    # de-dup per dept
     for d in list(out.keys()):
         seen = set()
         uniq = []
@@ -723,7 +753,6 @@ def set_dept_required_skills(dept: str, skill_keys: List[str], tenant_id: Option
         seen.add(kk)
         cleaned.append(kk)
 
-    # wipe old mapping then insert new
     _execute(
         "delete from dept_required_skills where tenant_id = ? and department_name = ?;",
         (tenant_id, dept),
@@ -754,7 +783,6 @@ def get_required_skills_for_dept(dept: str, tenant_id: Optional[str] = None) -> 
 
 # ============================================================
 # Checklists catalog (Admin-managed) (tenant-aware)
-# Table-based, returned as nested dict for UI
 # ============================================================
 def get_checklist_catalog(tenant_id: Optional[str] = None) -> Dict[str, Dict[str, List[str]]]:
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
@@ -810,7 +838,6 @@ def upsert_section_items(dept: str, section: str, items: List[str], tenant_id: O
     if not dept or not section:
         return
 
-    # delete existing section items then insert new
     _execute(
         "delete from checklists_catalog where tenant_id = ? and department = ? and section = ?;",
         (tenant_id, dept, section),
@@ -836,6 +863,273 @@ def delete_section(dept: str, section: str, tenant_id: Optional[str] = None) -> 
         "delete from checklists_catalog where tenant_id = ? and department = ? and section = ?;",
         (tenant_id, dept, section),
     )
+
+# -----------------------------
+# Per-audit checklist extras (auditor-added)
+# -----------------------------
+def get_checklist_extras(audit: Dict[str, Any], dept: str, section: str) -> List[str]:
+    """Return auditor-added checklist items stored within the audit record."""
+    dept = _normalize_text(dept)
+    section = _normalize_text(section)
+    try:
+        extras = (((audit.get("checklist_extras") or {}).get(dept) or {}).get(section) or [])
+    except Exception:
+        extras = []
+    if not isinstance(extras, list):
+        return []
+    out: List[str] = []
+    for x in extras:
+        s = str(x).strip()
+        if s:
+            out.append(s)
+    return out
+
+def get_effective_checklist_items(
+    audit_id: str,
+    dept: str,
+    section: str,
+    tenant_id: Optional[str] = None,
+) -> List[str]:
+    """Catalog checklist items + per-audit extras (deduped, preserves order)."""
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    dept = _normalize_text(dept)
+    section = _normalize_text(section)
+
+    a = get_audit(audit_id, tenant_id=tenant_id)
+    if not a:
+        return []
+
+    catalog_items = get_items_for_department_section(dept, section, tenant_id=tenant_id) or []
+    catalog_items = [str(x).strip() for x in catalog_items if str(x).strip()]
+    extras = get_checklist_extras(a, dept, section)
+
+    seen = set()
+    out: List[str] = []
+    for it in catalog_items + extras:
+        k = it.strip().lower()
+        if k and k not in seen:
+            seen.add(k)
+            out.append(it.strip())
+    return out
+
+def add_checklist_extra_item(
+    audit_id: str,
+    dept: str,
+    section: str,
+    item_text: str,
+    auditor_name: str,
+    tenant_id: Optional[str] = None,
+) -> Tuple[bool, str]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    dept = _normalize_text(dept)
+    section = _normalize_text(section)
+    item_text = str(item_text or "").strip()
+
+    if not item_text:
+        return False, "Checklist item cannot be empty."
+
+    a = get_audit(audit_id, tenant_id=tenant_id)
+    if not a:
+        return False, "Audit not found."
+
+    if a.get("status") != "In Progress":
+        return False, "Checklist can be edited only when the audit is 'In Progress'."
+
+    if a.get("assigned_auditor") != auditor_name:
+        return False, "You are not assigned to this audit."
+
+    a.setdefault("checklist_extras", {})
+    a["checklist_extras"].setdefault(dept, {})
+    a["checklist_extras"][dept].setdefault(section, [])
+
+    current = a["checklist_extras"][dept][section]
+    if not isinstance(current, list):
+        current = []
+        a["checklist_extras"][dept][section] = current
+
+    if item_text.lower() in {str(x).strip().lower() for x in current}:
+        return False, "This checklist item already exists."
+
+    current.append(item_text)
+    _save_updated_audit(a, tenant_id=tenant_id)
+    return True, "Added checklist item."
+
+def delete_checklist_extra_item(
+    audit_id: str,
+    dept: str,
+    section: str,
+    item_text: str,
+    auditor_name: str,
+    tenant_id: Optional[str] = None,
+) -> Tuple[bool, str]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    dept = _normalize_text(dept)
+    section = _normalize_text(section)
+    item_text = str(item_text or "").strip()
+
+    a = get_audit(audit_id, tenant_id=tenant_id)
+    if not a:
+        return False, "Audit not found."
+
+    if a.get("assigned_auditor") != auditor_name:
+        return False, "You are not assigned to this audit."
+
+    if a.get("status") != "In Progress":
+        return False, "You can edit extra checklist items only when the audit is 'In Progress'."
+
+    sec_list = (((a.get("checklist_extras") or {}).get(dept) or {}).get(section) or [])
+    if not isinstance(sec_list, list) or not sec_list:
+        return False, "No extra checklist items to delete."
+
+    new_list = [x for x in sec_list if str(x).strip().lower() != item_text.lower()]
+    if len(new_list) == len(sec_list):
+        return False, "Item not found."
+
+    a.setdefault("checklist_extras", {})
+    a["checklist_extras"].setdefault(dept, {})
+    a["checklist_extras"][dept][section] = new_list
+    _save_updated_audit(a, tenant_id=tenant_id)
+    return True, "Deleted checklist item."
+
+
+# ============================================================
+# Reports: Save uploaded report file + attach to audit
+# ============================================================
+def _safe_filename(name: str) -> str:
+    """Sanitize filename to prevent path traversal and weird characters."""
+    name = (name or "").strip()
+    if not name:
+        return "report"
+    name = name.replace("\\", "/").split("/")[-1]  # drop any path
+    name = re.sub(r"[^A-Za-z0-9._-]+", "_", name)
+    return name[:180] or "report"
+
+
+# ============================================================
+# Final Generated Reports (multi-audit PDF) - tenant-aware
+# ============================================================
+def _safe_relpath_under_tenant(tenant_id: str, rel_path: str) -> str:
+    """
+    Ensures rel_path stays within tenant root (prevents path traversal).
+    Stores and uses relative paths, but validates with absolute comparison.
+    """
+    rel_path = (rel_path or "").replace("\\", "/").lstrip("/")
+    if not rel_path:
+        raise ValueError("rel_path is required.")
+
+    tenant_root = os.path.abspath(_tenant_root_dir(tenant_id))
+    abs_path = os.path.abspath(os.path.join(tenant_root, rel_path))
+
+    if not abs_path.startswith(tenant_root + os.sep) and abs_path != tenant_root:
+        raise ValueError("Invalid path (outside tenant root).")
+
+    return rel_path
+
+def resolve_final_report_pdf_abs_path(tenant_id: str, pdf_rel_path: str) -> str:
+    rel = _safe_relpath_under_tenant(tenant_id, pdf_rel_path)
+    tenant_root = os.path.abspath(_tenant_root_dir(tenant_id))
+    return os.path.abspath(os.path.join(tenant_root, rel))
+
+def _normalize_users_list(users: List[str]) -> List[str]:
+    out: List[str] = []
+    seen = set()
+    for u in (users or []):
+        uu = _normalize_text(u)
+        if not uu:
+            continue
+        key = uu.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(uu)
+    return out
+
+def _audit_ids_to_auditors(audit_ids: List[str], tenant_id: str) -> List[str]:
+    """
+    Returns unique auditor usernames for audits. In your system, auditor login is normalize_username(person_name).
+    """
+    if not audit_ids:
+        return []
+    rows = _fetch_all(
+        """
+        select audit_id, assigned_auditor
+        from audits
+        where tenant_id = ? and audit_id in ({})
+        """.format(",".join(["?"] * len(audit_ids))),
+        tuple([tenant_id] + audit_ids),
+    )
+    auditors: List[str] = []
+    seen = set()
+    for r in rows:
+        person_name = _normalize_text(r.get("assigned_auditor", ""))
+        if not person_name:
+            continue
+        uname = _normalize_username(person_name)
+        if uname and uname.lower() not in seen:
+            seen.add(uname.lower())
+            auditors.append(uname)
+    return auditors
+
+
+def save_report_file(
+    audit_id: str,
+    uploaded_by: str,
+    original_filename: str,
+    file_bytes: bytes,
+    tenant_id: Optional[str] = None,
+) -> Tuple[bool, str]:
+    """
+    Saves uploaded file to disk and appends it into audit['reports'].
+    """
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+
+    audit_id = str(audit_id or "").strip()
+    if not audit_id:
+        return False, "audit_id is required."
+
+    if not file_bytes:
+        return False, "File is empty."
+
+    uploaded_by = _normalize_text(uploaded_by) or "unknown"
+    safe_name = _safe_filename(original_filename)
+
+    a = get_audit(audit_id, tenant_id=tenant_id)
+    if not a:
+        return False, "Audit not found."
+
+    tenant_root = os.path.join(UPLOADS_DIR, "tenants", str(tenant_id))
+    report_dir = os.path.join(tenant_root, "audits", audit_id, "reports")
+    os.makedirs(report_dir, exist_ok=True)
+
+    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base, ext = os.path.splitext(safe_name)
+    if not ext:
+        ext = ".bin"
+    saved_name = f"{base}_{ts}{ext}"
+    saved_path = os.path.join(report_dir, saved_name)
+
+    try:
+        with open(saved_path, "wb") as f:
+            f.write(file_bytes)
+    except Exception as e:
+        return False, f"Failed to save file: {e}"
+
+    reports = a.get("reports", [])
+    if not isinstance(reports, list):
+        reports = []
+
+    reports.append(
+        {
+            "file_name": safe_name,
+            "saved_path": saved_path,
+            "uploaded_by": uploaded_by,
+            "uploaded_at": _now_iso(),
+        }
+    )
+    a["reports"] = reports
+    _save_updated_audit(a, tenant_id=tenant_id)
+
+    return True, "Report uploaded successfully."
 
 
 # ============================================================
@@ -959,15 +1253,10 @@ def find_user(username: str, tenant_id: Optional[str] = None) -> Optional[Dict[s
 def authenticate(username: str, password: str) -> Tuple[bool, Optional[Dict[str, Any]], str]:
     """
     Backward compatible: uses DEFAULT_TENANT_CODE.
-    Your UI can keep calling authenticate(username,password) for now.
     """
     return authenticate_tenant(DEFAULT_TENANT_CODE, username, password)
 
 def authenticate_tenant(tenant_code: str, username: str, password: str) -> Tuple[bool, Optional[Dict[str, Any]], str]:
-    """
-    Tenant-aware authentication for SaaS.
-    Use this when you add a Tenant Code field in UI.
-    """
     tenant_code = _normalize_text(tenant_code).lower() or DEFAULT_TENANT_CODE
     tenant_id = ensure_seed_files(tenant_code)
 
@@ -998,7 +1287,7 @@ def authenticate_tenant(tenant_code: str, username: str, password: str) -> Tuple
 
 
 # ============================================================
-# Password change (tenant-aware)  <<< ADDED FEATURE
+# Password change (tenant-aware)
 # ============================================================
 def change_password(
     username: str,
@@ -1007,11 +1296,6 @@ def change_password(
     *,
     tenant_id: Optional[str] = None,
 ) -> Tuple[bool, str]:
-    """
-    Change password for the currently logged-in user.
-    Verifies old password, then updates password_salt/iterations/hash in DB.
-    Works for admin/manager/auditor.
-    """
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
 
     username = _normalize_text(username).lower()
@@ -1050,17 +1334,12 @@ def change_password(
 
     return True, "Password updated successfully."
 
-
 def admin_reset_password(
     target_username: str,
     new_password: str,
     *,
     tenant_id: Optional[str] = None,
 ) -> Tuple[bool, str]:
-    """
-    Admin-only helper (UI should restrict this to admin role).
-    Resets another user's password inside the same tenant.
-    """
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
 
     target_username = _normalize_text(target_username).lower()
@@ -1196,12 +1475,7 @@ def load_audits(tenant_id: Optional[str] = None) -> Dict[str, Any]:
     return {"audits": audits}
 
 def save_audits(data: Dict[str, Any], tenant_id: Optional[str] = None) -> None:
-    """
-    Kept for compatibility. Prefer updating individual audits with _save_updated_audit().
-    """
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
-    # This function is not used in the new flow, but kept to avoid breaking imports.
-    # You can remove later.
     for a in data.get("audits", []):
         _save_updated_audit(a, tenant_id=tenant_id)
 
@@ -1376,6 +1650,7 @@ def create_and_assign_audit(
         "report_submitted_at": "",
         "closed_at": "",
         "checklists": {},
+        "checklist_extras": {},
     }
 
     _save_updated_audit(audit, tenant_id=tenant_id)
@@ -1390,54 +1665,108 @@ def set_audit_status(audit_id: str, new_status: str, tenant_id: Optional[str] = 
     a = get_audit(audit_id, tenant_id=tenant_id)
     if not a:
         return False, "Audit not found."
+
+    allowed = {"Assigned", "In Progress", "Report Submitted", "Closed"}
+    if new_status not in allowed:
+        return False, f"Invalid status: {new_status}"
+
+    current = a.get("status") or "Assigned"
+
+    if new_status == "Report Submitted":
+        if current != "In Progress":
+            return False, "Can set 'Report Submitted' only from 'In Progress'."
+        if not a.get("reports"):
+            return False, "Cannot submit without uploading at least one report."
+        ok, msg = _validate_checklist_complete(a, tenant_id=tenant_id)
+        if not ok:
+            return False, msg
+
+    if new_status == "Closed":
+        if current != "Report Submitted":
+            return False, "Can close audit only after 'Report Submitted'."
+        if not a.get("reports"):
+            return False, "Cannot complete audit without uploading report."
+
+    if current == "Closed" and new_status != "Closed":
+        return False, "Closed audit cannot be reopened."
+
     a["status"] = new_status
+    if new_status == "Report Submitted" and not a.get("report_submitted_at"):
+        a["report_submitted_at"] = _now_iso()
+    if new_status == "Closed" and not a.get("closed_at"):
+        a["closed_at"] = _now_iso()
+
     _save_updated_audit(a, tenant_id=tenant_id)
     return True, "Status updated."
 
-def save_report_file(
-    audit_id: str,
-    uploaded_by: str,
-    original_filename: str,
-    file_bytes: bytes,
-    tenant_id: Optional[str] = None,
-) -> Tuple[bool, str]:
-    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
-    ensure_dirs()
+def _validate_checklist_complete(audit: Dict[str, Any], tenant_id: str) -> Tuple[bool, str]:
+    dept = _normalize_text(audit.get("audited_department", ""))
+    if not dept:
+        return False, "Audit department is missing."
 
-    a = get_audit(audit_id, tenant_id=tenant_id)
-    if not a:
-        return False, "Audit not found."
+    sections = get_sections_for_department(dept, tenant_id=tenant_id)
+    if not sections:
+        return False, f"Checklist is not configured for department '{dept}'. Ask Admin to create checklist sections."
 
-    ext = os.path.splitext(original_filename)[1].lower()
-    allowed = {".pdf", ".xlsx", ".xls", ".csv"}
-    if ext not in allowed:
-        return False, "Invalid file type. Allowed: PDF, XLSX/XLS, CSV."
+    saved = (audit.get("checklists") or {}).get(dept, {})
+    if not isinstance(saved, dict):
+        saved = {}
 
-    tenant_code = get_tenant_code_from_id(tenant_id)
+    missing_sections: List[str] = []
+    incomplete_examples: List[str] = []
 
-    audit_folder = os.path.join(UPLOADS_DIR, tenant_code, f"audit_{audit_id}")
-    os.makedirs(audit_folder, exist_ok=True)
+    for sec in sections:
+        expected_items = get_items_for_department_section(dept, sec, tenant_id=tenant_id)
+        expected_items = [str(x).strip() for x in expected_items if str(x).strip()]
 
-    safe_name = original_filename.replace("\\", "_").replace("/", "_")
-    saved_path = os.path.join(audit_folder, f"{uuid.uuid4().hex}_{safe_name}")
+        extras = get_checklist_extras(audit, dept, sec)
+        if extras:
+            expected_items = expected_items + extras
 
-    with open(saved_path, "wb") as f:
-        f.write(file_bytes)
+        _seen = set()
+        _deduped = []
+        for it in expected_items:
+            k = str(it).strip().lower()
+            if k and k not in _seen:
+                _seen.add(k)
+                _deduped.append(str(it).strip())
+        expected_items = _deduped
 
-    a["reports"].append(
-        {
-            "file_name": safe_name,
-            "saved_path": saved_path,
-            "uploaded_at": _now_iso(),
-            "uploaded_by": uploaded_by,
-        }
-    )
+        if not expected_items:
+            return False, f"Checklist section '{sec}' for department '{dept}' has no items. Ask Admin to configure it."
 
-    if a["status"] == "Assigned":
-        a["status"] = "In Progress"
+        rows = saved.get(sec)
+        if not rows:
+            missing_sections.append(sec)
+            continue
 
-    _save_updated_audit(a, tenant_id=tenant_id)
-    return True, "Report uploaded successfully."
+        try:
+            rows_sorted = sorted(rows, key=lambda r: int(str(r.get("sr_no", "0")).strip() or 0))
+        except Exception:
+            rows_sorted = list(rows)
+
+        if len(rows_sorted) < len(expected_items):
+            incomplete_examples.append(f"{sec} (missing rows)")
+            continue
+
+        for idx in range(len(expected_items)):
+            r = rows_sorted[idx] if idx < len(expected_items) else {}
+            obs = _normalize_text(r.get("observation", ""))
+            evd = _normalize_text(r.get("evidence", ""))
+            if not obs or not evd:
+                sr = str(r.get("sr_no", idx + 1)).strip() or str(idx + 1)
+                incomplete_examples.append(f"{sec} (SR {sr})")
+                break
+
+    if missing_sections:
+        return False, "Checklist incomplete. No saved responses for sections: " + ", ".join(missing_sections)
+
+    if incomplete_examples:
+        sample = ", ".join(incomplete_examples[:5])
+        more = "" if len(incomplete_examples) <= 5 else f" (+{len(incomplete_examples) - 5} more)"
+        return False, f"Checklist incomplete. Fill Observation and Evidence for every row. Incomplete examples: {sample}{more}"
+
+    return True, "Checklist complete."
 
 def submit_report(audit_id: str, auditor_name: str, tenant_id: Optional[str] = None) -> Tuple[bool, str]:
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
@@ -1446,8 +1775,18 @@ def submit_report(audit_id: str, auditor_name: str, tenant_id: Optional[str] = N
         return False, "Audit not found."
     if a.get("assigned_auditor") != auditor_name:
         return False, "You are not assigned to this audit."
+    if a.get("status") != "In Progress":
+        return False, "Report can be submitted only when the audit is 'In Progress'."
     if not a.get("reports"):
-        return False, "Report upload is mandatory before submission."
+        return False, "Please upload at least one report file before submitting."
+
+    ok_chk, msg_chk = validate_audit_checklists_complete(audit_id, tenant_id=tenant_id)
+    if not ok_chk:
+        return False, msg_chk
+
+    ok, msg = _validate_checklist_complete(a, tenant_id=tenant_id)
+    if not ok:
+        return False, msg
 
     a["status"] = "Report Submitted"
     a["report_submitted_at"] = _now_iso()
@@ -1486,6 +1825,249 @@ def complete_audit(audit_id: str, auditor_name: str, tenant_id: Optional[str] = 
 
     return True, "Audit completed and auditor unlocked."
 
+
+# ============================================================
+# Final Generated Reports: register/list/get/delete (tenant-aware)
+# ============================================================
+def register_final_generated_report(
+    *,
+    created_by: str,
+    summary: str,
+    audit_ids: List[str],
+    pdf_rel_path: str,
+    allowed_users: Optional[List[str]] = None,
+    tenant_id: Optional[str] = None,
+) -> Tuple[bool, Optional[Dict[str, Any]], str]:
+    """
+    Register a final generated report (PDF already created by report_generator).
+    - audit_ids: list of audit_id strings
+    - pdf_rel_path: relative to tenant root, e.g. "generated_reports/final_report_xxx.pdf"
+    - allowed_users: if None, auto = [created_by] + assigned auditors for those audits
+    """
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+
+    created_by = _normalize_text(created_by)
+    if not created_by:
+        return False, None, "created_by is required."
+
+    audit_ids = [str(x or "").strip() for x in (audit_ids or []) if str(x or "").strip()]
+    audit_ids = list(dict.fromkeys(audit_ids))
+    if not audit_ids:
+        return False, None, "At least one audit must be selected."
+
+    # Validate audits exist for this tenant
+    rows = _fetch_all(
+        "select audit_id from audits where tenant_id = ? and audit_id in ({})".format(",".join(["?"] * len(audit_ids))),
+        tuple([tenant_id] + audit_ids),
+    )
+    found = {str(r["audit_id"]) for r in rows}
+    missing = [a for a in audit_ids if a not in found]
+    if missing:
+        return False, None, f"Invalid audit IDs: {missing}"
+
+    # Validate PDF path is safe and exists
+    try:
+        pdf_rel_path = _safe_relpath_under_tenant(tenant_id, pdf_rel_path)
+        abs_path = resolve_final_report_pdf_abs_path(tenant_id, pdf_rel_path)
+    except Exception as e:
+        return False, None, f"Invalid PDF path: {e}"
+
+    if not os.path.exists(abs_path):
+        return False, None, "PDF file not found on disk. Generate the PDF first, then register."
+
+    # Determine allowed users
+    if allowed_users is None:
+        auto_auditors = _audit_ids_to_auditors(audit_ids, tenant_id)
+        allowed_users = [created_by] + auto_auditors
+
+    allowed_users = _normalize_users_list(allowed_users)
+    if not allowed_users:
+        return False, None, "allowed_users cannot be empty."
+
+    report_id = _uuid()
+    row = {
+        "id": report_id,
+        "tenant_id": tenant_id,
+        "created_by": created_by,
+        "created_at": _now_iso(),
+        "summary": summary or "",
+        "audit_ids_json": json.dumps(audit_ids),
+        "allowed_users_json": json.dumps(allowed_users),
+        "pdf_rel_path": pdf_rel_path,
+        "is_deleted": 0,
+        "deleted_at": None,
+        "deleted_by": None,
+    }
+
+    _execute(
+        """
+        insert into generated_final_reports
+        (id, tenant_id, created_by, created_at, summary, audit_ids_json, allowed_users_json, pdf_rel_path, is_deleted, deleted_at, deleted_by)
+        values (?, ?, ?, ?, ?, ?, ?, ?, 0, null, null);
+        """,
+        (
+            row["id"], row["tenant_id"], row["created_by"], row["created_at"], row["summary"],
+            row["audit_ids_json"], row["allowed_users_json"], row["pdf_rel_path"],
+        ),
+    )
+
+    return True, row, "Final report registered."
+
+
+def list_final_generated_reports_for_user(
+    username: str,
+    role: str,
+    tenant_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Admin: all non-deleted
+    Others: only where username is in allowed_users_json
+    """
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    username = _normalize_text(username)
+    role = str(role or "").strip().lower()
+
+    rows = _fetch_all(
+        """
+        select id, created_by, created_at, summary, audit_ids_json, allowed_users_json, pdf_rel_path
+        from generated_final_reports
+        where tenant_id = ? and is_deleted = 0
+        order by created_at desc;
+        """,
+        (tenant_id,),
+    )
+
+    out: List[Dict[str, Any]] = []
+    for r in rows:
+        allowed = []
+        try:
+            allowed = json.loads(r.get("allowed_users_json") or "[]")
+        except Exception:
+            allowed = []
+        allowed_norm = {str(x).strip().lower() for x in (allowed or []) if str(x).strip()}
+
+        if role == "admin" or (username and username.lower() in allowed_norm):
+            out.append(
+                {
+                    "id": r["id"],
+                    "created_by": r["created_by"],
+                    "created_at": r["created_at"],
+                    "summary": r["summary"],
+                    "audit_ids": json.loads(r.get("audit_ids_json") or "[]"),
+                    "allowed_users": allowed,
+                    "pdf_rel_path": r["pdf_rel_path"],
+                }
+            )
+    return out
+
+
+def get_final_generated_report(
+    report_id: str,
+    username: str,
+    role: str,
+    tenant_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    report_id = str(report_id or "").strip()
+    if not report_id:
+        return None
+
+    r = _fetch_one(
+        """
+        select id, created_by, created_at, summary, audit_ids_json, allowed_users_json, pdf_rel_path, is_deleted
+        from generated_final_reports
+        where tenant_id = ? and id = ?
+        limit 1;
+        """,
+        (tenant_id, report_id),
+    )
+    if not r or int(r.get("is_deleted") or 0) == 1:
+        return None
+
+    role = str(role or "").strip().lower()
+    username = _normalize_text(username)
+
+    allowed = []
+    try:
+        allowed = json.loads(r.get("allowed_users_json") or "[]")
+    except Exception:
+        allowed = []
+    allowed_norm = {str(x).strip().lower() for x in (allowed or []) if str(x).strip()}
+
+    if role != "admin" and (not username or username.lower() not in allowed_norm):
+        return None
+
+    return {
+        "id": r["id"],
+        "created_by": r["created_by"],
+        "created_at": r["created_at"],
+        "summary": r["summary"],
+        "audit_ids": json.loads(r.get("audit_ids_json") or "[]"),
+        "allowed_users": allowed,
+        "pdf_rel_path": r["pdf_rel_path"],
+    }
+
+
+def delete_final_generated_report(
+    report_id: str,
+    requester_role: str,
+    tenant_id: Optional[str] = None,
+) -> Tuple[bool, str]:
+    """
+    Admin-only delete.
+    - marks record deleted
+    - attempts to delete PDF file from disk
+    """
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    requester_role = str(requester_role or "").strip().lower()
+
+    if requester_role != "admin":
+        return False, "Only admin can delete final reports."
+
+    report_id = str(report_id or "").strip()
+    if not report_id:
+        return False, "report_id is required."
+
+    r = _fetch_one(
+        """
+        select id, pdf_rel_path, is_deleted
+        from generated_final_reports
+        where tenant_id = ? and id = ?
+        limit 1;
+        """,
+        (tenant_id, report_id),
+    )
+    if not r:
+        return False, "Final report not found."
+    if int(r.get("is_deleted") or 0) == 1:
+        return False, "Final report already deleted."
+
+    pdf_rel_path = str(r.get("pdf_rel_path") or "")
+    abs_path = None
+    try:
+        abs_path = resolve_final_report_pdf_abs_path(tenant_id, pdf_rel_path)
+    except Exception:
+        abs_path = None
+
+    _execute(
+        """
+        update generated_final_reports
+        set is_deleted = 1, deleted_at = ?, deleted_by = ?
+        where tenant_id = ? and id = ?;
+        """,
+        (_now_iso(), "admin", tenant_id, report_id),
+    )
+
+    # best-effort file deletion
+    if abs_path and os.path.exists(abs_path):
+        try:
+            os.remove(abs_path)
+        except Exception:
+            pass
+
+    return True, "Final report deleted."
+
+
 # ============================================================
 # Checklist responses (stored per audit in audits table JSON)
 # ============================================================
@@ -1494,6 +2076,7 @@ def save_audit_section_table(
     dept: str,
     section: str,
     rows: List[Dict[str, str]],
+    auditor_name: Optional[str] = None,
     tenant_id: Optional[str] = None
 ) -> Tuple[bool, str]:
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
@@ -1505,6 +2088,12 @@ def save_audit_section_table(
     a = get_audit(audit_id, tenant_id=tenant_id)
     if not a:
         return False, "Audit not found."
+
+    if auditor_name is not None:
+        if a.get("assigned_auditor") != auditor_name:
+            return False, "You are not assigned to this audit."
+        if a.get("status") != "In Progress":
+            return False, "Checklist can be edited only when the audit is 'In Progress'."
 
     a.setdefault("checklists", {})
     if dept not in a["checklists"]:
@@ -1527,6 +2116,91 @@ def load_audit_section_table(
     if not a:
         return None
     return a.get("checklists", {}).get(dept, {}).get(section)
+
+def add_audit_section_checklist_item(
+    audit_id: str,
+    dept: str,
+    section: str,
+    checklist_text: str,
+    auditor_name: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+) -> Tuple[bool, str]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    dept = _normalize_text(dept)
+    section = _normalize_text(section)
+    checklist_text = (checklist_text or "").strip()
+    if not checklist_text:
+        return False, "Checklist point is required."
+
+    existing = load_audit_section_table(audit_id, dept, section, tenant_id=tenant_id) or []
+    if existing:
+        rows = list(existing)
+    else:
+        items = get_items_for_department_section(dept, section, tenant_id=tenant_id)
+        rows = []
+        for i, item in enumerate(items, start=1):
+            rows.append(
+                {
+                    "sr_no": str(i),
+                    "checklist": str(item).strip(),
+                    "observation": "",
+                    "evidence": "",
+                }
+            )
+
+    next_sr = str(len(rows) + 1)
+    rows.append(
+        {
+            "sr_no": next_sr,
+            "checklist": checklist_text,
+            "observation": "",
+            "evidence": "",
+        }
+    )
+
+    return save_audit_section_table(
+        audit_id=audit_id,
+        dept=dept,
+        section=section,
+        rows=rows,
+        auditor_name=auditor_name,
+        tenant_id=tenant_id,
+    )
+
+def validate_audit_checklists_complete(
+    audit_id: str,
+    tenant_id: Optional[str] = None,
+) -> Tuple[bool, str]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    a = get_audit(audit_id, tenant_id=tenant_id)
+    if not a:
+        return False, "Audit not found."
+
+    checklists = a.get("checklists") or {}
+    if not isinstance(checklists, dict) or not checklists:
+        return False, "Checklist is not filled yet. Please fill Observation and Evidence before submitting."
+
+    any_rows = False
+    for dept, sec_map in (checklists or {}).items():
+        if not isinstance(sec_map, dict):
+            continue
+        for section, rows in sec_map.items():
+            if not rows:
+                continue
+            any_rows = True
+            for r in rows:
+                obs = str((r or {}).get("observation", "")).strip()
+                evd = str((r or {}).get("evidence", "")).strip()
+                chk = str((r or {}).get("checklist", "")).strip()
+                if not chk:
+                    return False, "Checklist has an empty point. Please remove or fill it before submitting."
+                if not obs or not evd:
+                    return False, "Checklist incomplete. Please fill Observation and Evidence for all points before submitting."
+
+    if not any_rows:
+        return False, "Checklist is not filled yet. Please fill Observation and Evidence before submitting."
+
+    return True, "Checklist complete."
 
 
 # ============================================================
@@ -1592,7 +2266,6 @@ def add_auditor(
             (_uuid(), tenant_id, name, kk),
         )
 
-    # create login for auditor (if missing)
     uname = _normalize_username(name)
     user_exists = _fetch_one(
         "select id from users where tenant_id = ? and lower(username) = ? limit 1;",
@@ -1639,6 +2312,7 @@ def delete_auditor(name: str, tenant_id: Optional[str] = None) -> Tuple[bool, st
     )
 
     return True, "Auditor deleted successfully."
+
 
 # ============================================================
 # UI helper: show Audit Title instead of Audit ID (tenant-aware)
@@ -1694,7 +2368,7 @@ def get_audit_dropdown_options(tenant_id: Optional[str] = None) -> Tuple[List[st
             seen[key] += 1
             key = f"{base} [{seen[base]}]"
         else:
-            seen[base] = 1
+            seen[key] = 1
 
         labels.append(key)
         label_to_id[key] = audit_id

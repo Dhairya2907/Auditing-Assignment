@@ -1,6 +1,0 @@
-{
-  "admin": {
-    "role": "admin",
-    "password_hash": "pbkdf2_sha256$200000$d867d175a8ddd6d8c9b508617bbb7af5$6f3ca5e302a4d7e6d16840dc662294e843c17213cae19192ee6981377c30b82a"
-  }
-}

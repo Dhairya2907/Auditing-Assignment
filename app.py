@@ -1,14 +1,16 @@
 import streamlit as st
 from typing import List, Dict, Set, Optional
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 import os
 import json
 import inspect
+import glob
 
 import engine
 import timetable  # timetable.py must be in same folder
 import report_generator  # final PDF report generation
+
 
 # ============================================================
 # ENTERPRISE (high-authority) UI THEME + COMPONENTS
@@ -272,7 +274,6 @@ inject_enterprise_css()
 try:
     engine.ensure_seed_files(tenant_code="default", tenant_name="Default")
 except TypeError:
-    # If your engine.ensure_seed_files does not accept args, keep old behaviour.
     engine.ensure_seed_files()
 
 # ============================================================
@@ -467,8 +468,7 @@ def _current_tenant_id() -> Optional[str]:
 def _engine_call(func_name: str, *args, **kwargs):
     """
     Calls engine.<func_name> and injects tenant_id automatically
-    if the function supports it. This prevents breakage if some
-    functions are still old-style.
+    if the function supports it.
     """
     fn = getattr(engine, func_name)
     try:
@@ -585,12 +585,10 @@ def show_auditor_timetable_reminder(auditor_name: str, remind_within_minutes: in
 # Helpers: persistent dropdown options
 # ============================================================
 def get_department_options_with_other() -> List[str]:
-    # ✅ tenant-aware
     return _engine_call("load_departments_catalog") + ["Other"]
 
 
 def get_skill_catalog() -> Dict[str, str]:
-    # ✅ tenant-aware
     return _engine_call("load_skills_catalog")
 
 
@@ -648,7 +646,7 @@ def build_audit_dropdown(
 
 
 # ============================================================
-# Audits table (with optional search for professionalism)
+# Audits table
 # ============================================================
 def audits_table(audits: List[Dict], *, search_query: str = ""):
     if not audits:
@@ -685,7 +683,7 @@ def audits_table(audits: List[Dict], *, search_query: str = ""):
 
 
 # ============================================================
-# ✅ Login UI (MULTI-TENANT added, looks same, only adds one field)
+# ✅ Login UI
 # ============================================================
 if not st.session_state.auth["logged_in"]:
     render_topbar(username="Not signed in", role="Access")
@@ -710,11 +708,9 @@ if not st.session_state.auth["logged_in"]:
         tenant_code = (tenant_code or "").strip().lower()
         username = (username or "").strip().lower()
 
-        # ✅ new multi-tenant auth if available
         if hasattr(engine, "authenticate_tenant"):
             ok, u, msg = engine.authenticate_tenant(tenant_code, username, password)
         else:
-            # fallback to old auth (single tenant)
             ok, u, msg = engine.authenticate(username, password)
 
         if not ok:
@@ -737,6 +733,7 @@ if not st.session_state.auth["logged_in"]:
     st.write("- Auditor: username is lowercase name (no spaces), password: **auditor123**")
     st.stop()
 
+
 # ============================================================
 # Main App
 # ============================================================
@@ -744,18 +741,19 @@ require_login()
 
 role = st.session_state.auth["role"]
 username = st.session_state.auth["username"]
-person_name = st.session_state.auth["person_name"]
+person_name = st.session_state.auth.get("person_name")
 
 render_topbar(username=username, role=role)
 
 if role == "auditor" and person_name:
     show_auditor_timetable_reminder(person_name, remind_within_minutes=30)
 
-# ✅ tenant-aware
 all_audits = _engine_call("list_audits")
+my_audits = [a for a in all_audits if a.get("assigned_auditor") == person_name] if role == "auditor" else []
+
 
 # ============================================================
-# Sidebar (brand strip + session info + logout)
+# Sidebar
 # ============================================================
 with st.sidebar:
     st.markdown(
@@ -775,12 +773,16 @@ with st.sidebar:
     )
 
     st.markdown("### Session")
-    st.markdown(f"<div class='subtle'>Tenant: <b>{st.session_state.auth.get('tenant_code','default')}</b></div>", unsafe_allow_html=True)
+    st.markdown(
+        f"<div class='subtle'>Tenant: <b>{st.session_state.auth.get('tenant_code','default')}</b></div>",
+        unsafe_allow_html=True,
+    )
     st.markdown(f"<div class='subtle'>User: <b>{username}</b></div>", unsafe_allow_html=True)
     st.markdown(f"<div class='subtle'>Role: <b>{role}</b></div>", unsafe_allow_html=True)
     st.write("")
     st.button("Logout", on_click=logout, use_container_width=True)
     st.write("")
+
 
 # ============================================================
 # Sidebar menus with nested Checklist
@@ -811,8 +813,6 @@ else:
 
     if page == "Checklist":
         st.sidebar.markdown("**Checklist sub-menu**")
-
-        my_audits = [a for a in all_audits if a.get("assigned_auditor") == person_name]
         my_depts = sorted(
             {
                 (a.get("audited_department") or "").strip()
@@ -831,6 +831,7 @@ else:
                 key="auditor_checklist_dept_radio",
             )
 
+
 # ============================================================
 # Admin Pages
 # ============================================================
@@ -839,7 +840,6 @@ if role == "admin" and page == "Dashboard":
     render_panel("Portfolio Overview", "Visibility into audits, reports, and auditor availability.")
     st.write("")
 
-    # Quick actions (UI only; does not change your logic)
     qa1, qa2, qa3 = st.columns(3)
     with qa1:
         st.button("Create Audit", use_container_width=True)
@@ -852,7 +852,6 @@ if role == "admin" and page == "Dashboard":
     render_status_legend()
     st.write("")
 
-    # KPIs (display only)
     total = len(all_audits)
     open_count = sum(1 for a in all_audits if str(a.get("status", "")).strip().lower() != "closed")
     closed_count = sum(1 for a in all_audits if str(a.get("status", "")).strip().lower() == "closed")
@@ -901,15 +900,6 @@ if role == "admin" and page == "Dashboard":
         )
     st.dataframe(rows, use_container_width=True, hide_index=True)
 
-    st.write("")
-    render_panel("Recent Activity", "Operational activity view (optional).")
-    st.write("")
-    st.info(
-        "If you want, we can add an audit-trail log (activity_log.json) that records: audit assigned, checklist saved, report uploaded, status updated."
-    )
-        # ============================================================
-    # Admin Security: Change Password
-    # ============================================================
     st.divider()
     st.subheader("Security: Change Password")
     st.caption("Change your login password. This affects only your account.")
@@ -1013,16 +1003,6 @@ elif role == "admin" and page == "Auditors & Skills":
                 else:
                     st.error(msg)
 
-        st.divider()
-        st.subheader("Department required skills")
-        dept_req = _engine_call("load_dept_required_skills")
-        skill_cat = get_skill_catalog()
-        for dept in _engine_call("load_departments_catalog"):
-            req_keys = dept_req.get(dept, [])
-            pretty = [skill_cat.get(k, k) for k in req_keys]
-            st.write(f"**{dept}**")
-            st.write(pretty if pretty else ["(No required skills defined yet)"])
-
     with right:
         render_panel("Auditor Dashboard", "All auditors loaded from people.json.")
         st.write("")
@@ -1057,6 +1037,7 @@ elif role == "admin" and page == "Auditors & Skills":
                 st.rerun()
             else:
                 st.error(msg)
+
 
 elif role == "admin" and page == "Create & Assign Audit":
     st.title("Create & Assign Audit")
@@ -1128,20 +1109,9 @@ elif role == "admin" and page == "Create & Assign Audit":
                 st.success(msg)
                 st.json(audit)
 
-# ----------------------------
-# The rest of your file remains the same pattern.
-# Any place you call engine.<something>(), change it to _engine_call("<something>", ...)
-# if you want strict tenant isolation everywhere.
-# ----------------------------
-
-# NOTE:
-# Your pasted app.py ended mid-way; this file intentionally keeps your UI unchanged
-# and adds multi-tenant login plus tenant-aware engine calls in the critical paths.
-
 
 elif role == "admin" and page == "Audit Plan":
     import pandas as pd
-    from datetime import date
 
     st.title("Audit Plan")
     st.caption(
@@ -1149,7 +1119,6 @@ elif role == "admin" and page == "Audit Plan":
     )
 
     skill_cat = get_skill_catalog()
-
     SLOTS = timetable.generate_daily_slots("09:30", "18:30", 60)
 
     selected_date = st.date_input("Select audit date", value=date.today(), key="tt_date")
@@ -1172,7 +1141,7 @@ elif role == "admin" and page == "Audit Plan":
             custom_dept = st.text_input("Enter new department to audit", key="tt_custom_dept")
         audited_dept = custom_dept.strip() if dept_choice == "Other" else dept_choice
 
-        required = engine.get_required_skills_for_dept(audited_dept) if audited_dept else set()
+        required = _engine_call("get_required_skills_for_dept", audited_dept) if audited_dept else set()
         save_as_default = False
         if required:
             st.write("Required skills (saved):")
@@ -1186,12 +1155,12 @@ elif role == "admin" and page == "Audit Plan":
                 placeholder="e.g.\nProcess audit planning\nSupplier evaluation\nTraining record review",
             )
             labels = [s.strip() for s in req_text.splitlines() if s.strip()]
-            req_keys = [engine.ensure_skill_in_catalog(lbl) for lbl in labels]
+            req_keys = [_engine_call("ensure_skill_in_catalog", lbl) for lbl in labels]
             required = set(req_keys)
             save_as_default = st.checkbox("Save as default required skills for this department", value=True, key="tt_save_req")
 
-        people = engine.load_people()
-        state = engine.load_state()
+        people = _engine_call("load_people")
+        state = _engine_call("load_state")
         schedule = timetable.load_schedule()
 
         eligible_names = []
@@ -1222,9 +1191,9 @@ elif role == "admin" and page == "Audit Plan":
             elif auditor is None:
                 st.error("No eligible auditor available.")
             else:
-                engine.add_department_to_catalog(audited_dept)
+                _engine_call("add_department_to_catalog", audited_dept)
                 if save_as_default:
-                    engine.set_dept_required_skills(audited_dept, sorted(required))
+                    _engine_call("set_dept_required_skills", audited_dept, sorted(required))
 
                 ok, msg = timetable.add_audit_to_slot(
                     date_str=date_str,
@@ -1264,6 +1233,7 @@ elif role == "admin" and page == "Audit Plan":
                 else:
                     st.error(msg)
 
+
 # ============================================================
 # Checklist pages
 # ============================================================
@@ -1281,7 +1251,7 @@ elif role == "admin" and page == "Checklist":
     render_panel("Checklist Library", f"Department: {dept_for_checklist}")
     st.write("")
 
-    sections = engine.get_sections_for_department(dept_for_checklist)
+    sections = _engine_call("get_sections_for_department", dept_for_checklist)
     pick_section = st.selectbox("Section", ["(Create New)"] + sections, key=f"chk_admin_section_{dept_for_checklist}")
 
     new_section = ""
@@ -1290,7 +1260,7 @@ elif role == "admin" and page == "Checklist":
 
     section_name = new_section if pick_section == "(Create New)" else pick_section
 
-    existing_items = engine.get_items_for_department_section(dept_for_checklist, section_name) if section_name else []
+    existing_items = _engine_call("get_items_for_department_section", dept_for_checklist, section_name) if section_name else []
     st.write("Edit checklist items below. One row = one checklist point.")
 
     df_items = pd.DataFrame({"Checklist": existing_items if existing_items else [""]})
@@ -1310,36 +1280,31 @@ elif role == "admin" and page == "Checklist":
                 st.error("Please select an existing section or enter a new section name.")
             else:
                 cleaned = [str(x).strip() for x in edited_df["Checklist"].tolist() if str(x).strip()]
-                engine.upsert_section_items(dept_for_checklist, section_name, cleaned)
+                _engine_call("upsert_section_items", dept_for_checklist, section_name, cleaned)
                 st.success(f"Saved checklist for: {dept_for_checklist} → {section_name}")
                 st.rerun()
 
     with cB:
         if pick_section != "(Create New)" and st.button("Delete Section", key=f"chk_admin_delete_{dept_for_checklist}_{pick_section}"):
-            engine.delete_section(dept_for_checklist, pick_section)
+            _engine_call("delete_section", dept_for_checklist, pick_section)
             st.success(f"Deleted section: {dept_for_checklist} → {pick_section}")
             st.rerun()
 
     with cC:
         st.info("Tip: Create sections like General Requirements, Inputs, Outputs, etc.")
 
+
 elif role == "auditor" and page == "Checklist":
     st.title("Checklist (Auditor)")
-    st.caption("You can edit checklist only for departments that you are assigned to audit.")
+    st.caption("Fill Observation and Evidence for your assigned audits. You can also add extra checklist points for the selected audit.")
 
     import pandas as pd
 
-    my_audits = [a for a in all_audits if a.get("assigned_auditor") == person_name]
-    my_depts = sorted(
-        {
-            (a.get("audited_department") or "").strip()
-            for a in my_audits
-            if (a.get("audited_department") or "").strip()
-        },
-        key=lambda x: x.lower(),
-    )
+    if not person_name:
+        st.error("Auditor profile not linked to this account.")
+        st.stop()
 
-    if not my_depts:
+    if not my_audits:
         st.info("No audits assigned to you yet.")
         st.stop()
 
@@ -1347,142 +1312,128 @@ elif role == "auditor" and page == "Checklist":
         st.info("Select a department from the sidebar Checklist sub-menu.")
         st.stop()
 
-    dept = checklist_department
+    dept = checklist_department.strip()
+    dept_audits = [
+        a for a in my_audits
+        if (a.get("audited_department") or "").strip().lower() == dept.lower()
+    ]
 
-    if dept.strip().lower() not in {d.strip().lower() for d in my_depts}:
-        st.error("Access denied. You can edit checklist only for departments you are assigned to audit.")
+    if not dept_audits:
+        st.info(f"No audits assigned to you for department: {dept}")
         st.stop()
 
-    mode = st.radio(
-        "Mode",
-        ["Fill Observation/Evidence for my audit", "Create/Edit checklist library"],
-        horizontal=True,
-        key=f"aud_chk_mode_{dept}",
+    labels, label_to_id = build_audit_dropdown(
+        dept_audits,
+        restrict_to_auditor=False,
+        auditor_name=None,
+    )
+    selected_label = st.selectbox("Select Audit", options=labels, key=f"aud_chk_pick_audit_{dept}")
+    audit_id = label_to_id[selected_label]
+
+    audit = _engine_call("get_audit", audit_id)
+    if not audit:
+        st.error("Audit not found.")
+        st.stop()
+
+    if audit.get("assigned_auditor") == person_name and audit.get("status") == "Assigned":
+        _engine_call("set_audit_status", audit_id, "In Progress")
+        audit = _engine_call("get_audit", audit_id)
+
+    sections = _engine_call("get_sections_for_department", dept)
+    if not sections:
+        st.info(f"No checklist sections found for department '{dept}'. Ask admin to create sections in Admin → Checklist.")
+        st.stop()
+
+    st.subheader("Department Checklist (Section-wise)")
+    section = st.selectbox("Select Checklist Section", options=sections, key=f"aud_chk_section_{audit_id}_{dept}")
+
+    saved_rows = _engine_call("load_audit_section_table", audit_id, dept, section)
+    if saved_rows:
+        df = pd.DataFrame(saved_rows)
+        df = df.rename(columns={
+            "sr_no": "SR No",
+            "checklist": "Checklist",
+            "observation": "Observation",
+            "evidence": "Evidence",
+        })
+    else:
+        items = _engine_call("get_items_for_department_section", dept, section)
+        df = pd.DataFrame({
+            "SR No": list(range(1, len(items) + 1)),
+            "Checklist": items,
+            "Observation": ["" for _ in items],
+            "Evidence": ["" for _ in items],
+        })
+
+    st.caption("Fill Observation and Evidence for every checklist point. You can add extra checklist points for this audit and section.")
+
+    can_edit = (
+        audit.get("assigned_auditor") == person_name
+        and audit.get("status") == "In Progress"
     )
 
-    if mode == "Create/Edit checklist library":
-        render_panel("Edit Checklist Library", f"Department: {dept}")
-        st.write("")
+    if not can_edit:
+        st.warning("Checklist is locked. You can edit only when this audit is 'In Progress' and assigned to you.")
 
-        sections = engine.get_sections_for_department(dept)
-        pick_section = st.selectbox("Section", ["(Create New)"] + sections, key=f"chk_aud_section_{dept}")
-
-        new_section = ""
-        if pick_section == "(Create New)":
-            new_section = st.text_input("New Section Name", key=f"chk_aud_new_section_{dept}").strip()
-
-        section_name = new_section if pick_section == "(Create New)" else pick_section
-
-        existing_items = engine.get_items_for_department_section(dept, section_name) if section_name else []
-        st.write("Edit checklist items below. One row = one checklist point.")
-
-        df_items = pd.DataFrame({"Checklist": existing_items if existing_items else [""]})
-        edited_df = st.data_editor(
-            df_items,
-            use_container_width=True,
-            num_rows="dynamic",
-            key=f"chk_aud_editor_{dept}_{section_name or 'blank'}",
-        )
-
-        c1, c2, c3 = st.columns([1, 1, 2])
-        with c1:
-            if st.button("Save Section Checklist", type="primary", key=f"chk_aud_save_{dept}"):
-                if not section_name:
-                    st.error("Please select an existing section or enter a new section name.")
-                else:
-                    cleaned = [str(x).strip() for x in edited_df["Checklist"].tolist() if str(x).strip()]
-                    engine.upsert_section_items(dept, section_name, cleaned)
-                    st.success(f"Saved checklist for: {dept} → {section_name}")
-                    st.rerun()
-
-        with c2:
-            if pick_section != "(Create New)" and st.button("Delete Section", key=f"chk_aud_delete_{dept}_{pick_section}"):
-                engine.delete_section(dept, pick_section)
-                st.success(f"Deleted section: {dept} → {pick_section}")
-                st.rerun()
-
-        with c3:
-            st.info("This is allowed only for your assigned audit departments.")
-
-    else:
-        dept_audits = [
-            a for a in my_audits
-            if (a.get("audited_department") or "").strip().lower() == dept.strip().lower()
-        ]
-
-        if not dept_audits:
-            st.info(f"No audits assigned to you for department: {dept}")
-            st.stop()
-
-        labels, label_to_id = build_audit_dropdown(
-            dept_audits,
-            restrict_to_auditor=False,
-            auditor_name=None,
-        )
-
-        if not labels:
-            st.info("No audits available.")
-            st.stop()
-
-        selected_label = st.selectbox("Select Audit", options=labels, key=f"aud_chk_pick_audit_{dept}")
-        audit_id = label_to_id[selected_label]
-        audit = engine.get_audit(audit_id)
-
-        if not audit:
-            st.error("Audit not found.")
-            st.stop()
-
-        sections = engine.get_sections_for_department(dept)
-        if not sections:
-            st.info(f"No checklist sections found for department '{dept}'. Create them in 'Create/Edit checklist library'.")
-            st.stop()
-
-        section = st.selectbox("Select Checklist Section", options=sections, key=f"aud_chk_section_{audit_id}_{dept}")
-
-        saved_rows = engine.load_audit_section_table(audit_id, dept, section)
-        if saved_rows:
-            df = pd.DataFrame(saved_rows)
-            df = df.rename(columns={
-                "sr_no": "SR No",
-                "checklist": "Checklist",
-                "observation": "Observation",
-                "evidence": "Evidence",
-            })
-        else:
-            items = engine.get_items_for_department_section(dept, section)
-            df = pd.DataFrame({
-                "SR No": list(range(1, len(items) + 1)),
-                "Checklist": items,
-                "Observation": ["" for _ in items],
-                "Evidence": ["" for _ in items],
-            })
-
-        st.caption("Fill Observation and Evidence. SR No and Checklist are locked.")
-        edited = st.data_editor(
-            df,
-            use_container_width=True,
-            disabled=["SR No", "Checklist"],
-            key=f"aud_chk_editor_{audit_id}_{dept}_{section}",
-        )
-
-        if st.button("Save Checklist Observations", type="primary", key=f"aud_chk_save_{audit_id}_{dept}_{section}"):
-            rows_to_save = []
-            for _, r in edited.iterrows():
-                rows_to_save.append({
-                    "sr_no": str(r.get("SR No", "")).strip(),
-                    "checklist": str(r.get("Checklist", "")).strip(),
-                    "observation": str(r.get("Observation", "")).strip(),
-                    "evidence": str(r.get("Evidence", "")).strip(),
-                })
-            ok, msg = engine.save_audit_section_table(audit_id, dept, section, rows_to_save)
-            if ok:
-                st.success(f"Saved: {dept} → {section}")
-                st.rerun()
+    with st.expander("Add extra checklist point (optional)", expanded=False):
+        extra_text = st.text_input("New checklist point", key=f"aud_extra_item_{audit_id}_{dept}_{section}")
+        if st.button("Add checklist point", key=f"aud_extra_add_{audit_id}_{dept}_{section}", disabled=not can_edit):
+            if not extra_text.strip():
+                st.error("Please enter a checklist point.")
             else:
-                st.error(msg)
+                ok, msg = _engine_call(
+                    "add_audit_section_checklist_item",
+                    audit_id=audit_id,
+                    dept=dept,
+                    section=section,
+                    checklist_text=extra_text.strip(),
+                    auditor_name=person_name,
+                )
+                if ok:
+                    st.success(msg)
+                    st.rerun()
+                else:
+                    st.error(msg)
+
+    edited = st.data_editor(
+        df,
+        use_container_width=True,
+        disabled=["SR No", "Checklist"] if can_edit else ["SR No", "Checklist", "Observation", "Evidence"],
+        key=f"aud_chk_editor_{audit_id}_{dept}_{section}",
+    )
+
+    if st.button(
+        "Save Checklist Observations",
+        type="primary",
+        key=f"aud_chk_save_{audit_id}_{dept}_{section}",
+        disabled=not can_edit,
+    ):
+        rows_to_save = []
+        for _, r in edited.iterrows():
+            rows_to_save.append({
+                "sr_no": str(r.get("SR No", "")).strip(),
+                "checklist": str(r.get("Checklist", "")).strip(),
+                "observation": str(r.get("Observation", "")).strip(),
+                "evidence": str(r.get("Evidence", "")).strip(),
+            })
+
+        ok, msg = _engine_call(
+            "save_audit_section_table",
+            audit_id,
+            dept,
+            section,
+            rows_to_save,
+            auditor_name=person_name,
+        )
+        if ok:
+            st.success("Checklist saved.")
+            st.rerun()
+        else:
+            st.error(msg)
+
 
 # ============================================================
-# Audit Details
+# Audit Details (Admin + Auditor)
 # ============================================================
 elif (role == "admin" and page == "Audit Details") or (role == "auditor" and page == "Audit Details"):
     st.title("Audit Details")
@@ -1499,10 +1450,10 @@ elif (role == "admin" and page == "Audit Details") or (role == "auditor" and pag
         st.warning("No audits available.")
         st.stop()
 
-    selected_label = st.selectbox("Select Audit", options=labels, key="audit_details_select")
+    selected_label = st.selectbox("Select Audit ID", options=labels, key="audit_details_select")
     selected_id = label_to_id[selected_label]
 
-    audit = engine.get_audit(selected_id) if selected_id else None
+    audit = _engine_call("get_audit", selected_id) if selected_id else None
     if not audit:
         st.warning("Select an audit.")
         st.stop()
@@ -1531,50 +1482,84 @@ elif (role == "admin" and page == "Audit Details") or (role == "auditor" and pag
     st.write("**Report Submitted At:**", audit.get("report_submitted_at") or "-")
     st.write("**Closed At:**", audit.get("closed_at") or "-")
 
+    # ----------------------------
+    # Reports (list + download)
+    # ----------------------------
+    st.write("")
     st.subheader("Reports")
-    reports = audit.get("reports", [])
+
+    reports = audit.get("reports", []) or []
     if not reports:
         st.info("No reports uploaded yet.")
     else:
-        for r in reports:
-            st.write(
-                f"- {r.get('file_name')} | uploaded_by: {r.get('uploaded_by')} | uploaded_at: {r.get('uploaded_at')}"
-            )
-            if role == "admin":
-                try:
-                    with open(r.get("saved_path", ""), "rb") as f:
-                        st.download_button(
-                            label=f"Download: {r.get('file_name')}",
-                            data=f.read(),
-                            file_name=r.get("file_name"),
-                            mime="application/octet-stream",
-                            key=f"dl_{audit.get('audit_id')}_{r.get('saved_path')}",
-                        )
-                except Exception:
-                    st.warning("Download unavailable for this file path.")
+        for idx, r in enumerate(reports, start=1):
+            file_name = r.get("file_name") or f"report_{idx}"
+            uploaded_by = r.get("uploaded_by") or "-"
+            uploaded_at = r.get("uploaded_at") or "-"
+            saved_path = r.get("saved_path") or ""
 
+            with st.container(border=True):
+                st.write(f"**{file_name}**")
+                st.write(f"Uploaded by: {uploaded_by}")
+                st.write(f"Uploaded at: {uploaded_at}")
+
+                if saved_path and os.path.exists(saved_path):
+                    try:
+                        with open(saved_path, "rb") as f:
+                            st.download_button(
+                                label="Download",
+                                data=f.read(),
+                                file_name=file_name,
+                                mime="application/octet-stream",
+                                key=f"dl_report_{audit.get('audit_id')}_{idx}",
+                            )
+                    except Exception:
+                        st.warning("Download unavailable for this file.")
+                else:
+                    st.warning("File path not found on server.")
+
+    # ----------------------------
+    # Auditor Actions (Upload + Submit + Complete) on Audit Details page
+    # ----------------------------
     if role == "auditor":
+        st.write("")
         st.subheader("Auditor Actions")
 
+        can_submit = (
+            audit.get("assigned_auditor") == person_name
+            and audit.get("status") == "In Progress"
+        )
+
         st.markdown("#### 1) Upload Report (PDF/XLSX/XLS/CSV)")
-        up = st.file_uploader("Choose a file", type=["pdf", "xlsx", "xls", "csv"])
-        if up is not None:
-            if st.button("Upload Report"):
-                ok, msg = engine.save_report_file(
-                    audit_id=audit["audit_id"],
-                    uploaded_by=person_name,
-                    original_filename=up.name,
-                    file_bytes=up.getvalue(),
-                )
-                if ok:
-                    st.success(msg)
-                    st.rerun()
-                else:
-                    st.error(msg)
+        up = st.file_uploader(
+            "Choose a file",
+            type=["pdf", "xlsx", "xls", "csv"],
+            key=f"ad_up_{audit.get('audit_id')}",
+        )
+
+        if st.button("Upload Report", type="primary", disabled=(not can_submit or up is None), key=f"ad_btn_up_{audit.get('audit_id')}"):
+            ok, msg = _engine_call(
+                "save_report_file",
+                audit_id=audit["audit_id"],
+                uploaded_by=person_name,
+                original_filename=up.name,
+                file_bytes=up.getvalue(),
+            )
+            if ok:
+                st.success(msg)
+                st.rerun()
+            else:
+                st.error(msg)
 
         st.markdown("#### 2) Submit Report (mandatory before completing)")
-        if st.button("Submit Report", type="primary"):
-            ok, msg = engine.submit_report(audit["audit_id"], person_name)
+        checklist_ok, checklist_msg = _engine_call("validate_audit_checklists_complete", audit["audit_id"])
+        if not checklist_ok:
+            st.info(checklist_msg)
+
+        submit_disabled = (not can_submit) or (not checklist_ok) or (len(audit.get("reports", []) or []) == 0)
+
+        if st.button("Submit Report", type="primary", disabled=submit_disabled, key=f"ad_btn_submit_{audit.get('audit_id')}"):
+            ok, msg = _engine_call("submit_report", audit["audit_id"], person_name)
             if ok:
                 st.success(msg)
                 st.rerun()
@@ -1582,195 +1567,274 @@ elif (role == "admin" and page == "Audit Details") or (role == "auditor" and pag
                 st.error(msg)
 
         st.markdown("#### 3) Complete Audit (blocked without submission)")
-        if st.button("Complete Audit"):
-            ok, msg = engine.complete_audit(audit["audit_id"], person_name)
+        if st.button("Complete Audit", disabled=(not can_submit), key=f"ad_btn_complete_{audit.get('audit_id')}"):
+            ok, msg = _engine_call("complete_audit", audit["audit_id"], person_name)
             if ok:
                 st.success(msg)
                 st.rerun()
             else:
                 st.error(msg)
 
+    # ----------------------------
+    # Admin Controls
+    # ----------------------------
     if role == "admin":
+        st.write("")
         st.subheader("Admin Controls")
+
         new_status = st.selectbox(
             "Set Status",
             ["Assigned", "In Progress", "Report Submitted", "Closed"],
             index=["Assigned", "In Progress", "Report Submitted", "Closed"].index(audit.get("status", "Assigned")),
+            key=f"ad_status_{audit.get('audit_id')}",
         )
-        if st.button("Update Status"):
-            ok, msg = engine.set_audit_status(audit["audit_id"], new_status)
+        if st.button("Update Status", key=f"ad_status_btn_{audit.get('audit_id')}"):
+            ok, msg = _engine_call("set_audit_status", audit["audit_id"], new_status)
             if ok:
                 st.success(msg)
                 st.rerun()
             else:
                 st.error(msg)
 
+
 # ============================================================
-# Reports (Admin generates; everyone can download; admin can delete)
+# Reports Page (Admin + Auditor)
 # ============================================================
 elif page == "Reports":
-    st.title("Final Reports (PDF)")
-    render_panel("Report Centre", "Generate and manage final consolidated audit reports.")
-    st.write("")
+    st.title("Reports")
+    st.caption("View submitted audit files and generated final PDFs. Admin can generate and delete final PDFs; auditors can only view/download.")
 
-    if role == "admin":
-        st.subheader("Generate final report PDF")
-        st.caption("Select audits, write summary per audit, then generate a single PDF. Only Admin can generate/delete.")
+    tenant_id = st.session_state.auth.get("tenant_id")
 
-        statuses = st.multiselect(
-            "Include audits by status",
-            ["Assigned", "In Progress", "Report Submitted", "Closed"],
-            default=["Closed"],
-            key="rep_statuses",
-        )
+    def _download_abs_path_button(label: str, abs_path: str, key: str):
+        try:
+            with open(abs_path, "rb") as f:
+                st.download_button(
+                    label=label,
+                    data=f.read(),
+                    file_name=os.path.basename(abs_path),
+                    mime="application/octet-stream",
+                    key=key,
+                )
+        except Exception:
+            st.warning(f"Download unavailable: {os.path.basename(abs_path)}")
 
-        statuses_lower = {s.strip().lower() for s in statuses if str(s).strip()}
-        selectable_audits = [a for a in all_audits if str(a.get("status", "")).strip().lower() in statuses_lower]
+    # --------------------------------------------------------
+    # 1) Submitted files (per audit)
+    # --------------------------------------------------------
+    st.subheader("Submitted Audit Files")
 
-        if not selectable_audits:
-            st.info("No audits available for the selected statuses.")
+    visible_audits = my_audits if role == "auditor" else all_audits
+
+    labels, label_to_id = build_audit_dropdown(
+        visible_audits,
+        restrict_to_auditor=(role == "auditor"),
+        auditor_name=person_name,
+    )
+
+    if not labels:
+        st.info("No audits available.")
+    else:
+        pick = st.selectbox("Select Audit", options=labels, key="reports_audit_pick")
+        audit_id = label_to_id[pick]
+        audit = _engine_call("get_audit", audit_id)
+
+        if not audit:
+            st.error("Audit not found.")
         else:
-            labels, label_to_id = build_audit_dropdown(
-                selectable_audits,
-                restrict_to_auditor=False,
-                auditor_name=None,
+            st.write("**Audit ID:**", audit.get("audit_id"))
+            st.write("**Title:**", audit.get("title") or "-")
+            st.write("**Department:**", audit.get("audited_department") or "-")
+            st.write("**Auditor:**", audit.get("assigned_auditor") or "-")
+            st.write("**Status:**", audit.get("status") or "-")
+
+            reports = audit.get("reports", []) or []
+            if not reports:
+                st.info("No submitted files for this audit yet.")
+            else:
+                for i, r in enumerate(reports, start=1):
+                    file_name = r.get("file_name") or f"report_{i}"
+                    saved_path = r.get("saved_path") or ""
+                    uploaded_by = r.get("uploaded_by") or "-"
+                    uploaded_at = r.get("uploaded_at") or "-"
+
+                    with st.container(border=True):
+                        st.write(f"**{file_name}**")
+                        st.write(f"Uploaded by: {uploaded_by}")
+                        st.write(f"Uploaded at: {uploaded_at}")
+
+                        if saved_path and os.path.exists(saved_path):
+                            _download_abs_path_button(
+                                label=f"Download {file_name}",
+                                abs_path=saved_path,
+                                key=f"dl_submitted_{audit_id}_{i}",
+                            )
+                        else:
+                            st.warning("File path not found on server.")
+
+    st.divider()
+
+    # --------------------------------------------------------
+    # 2) Admin: Generate final PDF
+    # --------------------------------------------------------
+    if role == "admin":
+        st.subheader("Generate Final Audit PDF")
+        st.caption("Select audits and write a short admin summary for each selected audit; then generate one consolidated PDF.")
+
+  # --------------------------------------------------------
+# Generate Final Audit PDF (STATUS-BASED, NO NUMBER INPUT)
+# --------------------------------------------------------
+
+status_choice = st.selectbox(
+    "Report Status",
+    ["Report Submitted", "Closed"],
+    index=0,
+    key="final_pdf_status"
+)
+
+desired_status = status_choice.lower()
+
+eligible = [
+    a for a in all_audits
+    if str(a.get("status", "")).strip().lower() == desired_status
+]
+
+if not eligible:
+    st.warning(f"No audits found with status: {status_choice}")
+    st.stop()
+
+labels2, label_to_id2 = build_audit_dropdown(
+    eligible,
+    restrict_to_auditor=False,
+    auditor_name=None,
+)
+
+selected_labels = st.multiselect(
+    "Select audits",
+    options=labels2,
+    key="final_pdf_select_audits",
+)
+
+selected_ids = [label_to_id2[lbl] for lbl in selected_labels]
+
+if not selected_ids:
+    st.info("Select at least one audit to continue.")
+    st.stop()
+
+# One summary box PER selected audit
+st.markdown("### Admin Summaries (one per audit)")
+
+summaries: Dict[str, str] = {}
+for aid in selected_ids:
+    a = _engine_call("get_audit", aid)
+    title = (a or {}).get("title") or aid
+
+    summaries[aid] = st.text_area(
+        f"Summary for: {title}",
+        key=f"final_summary_{aid}",
+        placeholder="Write audit summary, key findings, conclusion, and next actions.",
+        height=140,
+    )
+
+out_name = st.text_input(
+    "Output filename (optional)",
+    value=f"Final_Audit_Report_{datetime.now().strftime('%Y-%m-%d')}.pdf",
+)
+
+if st.button("Generate Final PDF", type="primary"):
+    missing = [aid for aid, txt in summaries.items() if not (txt or "").strip()]
+    if missing:
+        st.error("Please write a summary for every selected audit.")
+        st.stop()
+
+    ok, msg, pdf_abs = report_generator.generate_final_audit_report_pdf(
+        tenant_id=tenant_id,
+        generated_by=username,
+        selected_audit_ids=selected_ids,
+        admin_summaries_by_audit_id=summaries,
+        output_filename=out_name.strip() or None,
+    )
+
+    if ok:
+        st.success(msg)
+        if pdf_abs and os.path.exists(pdf_abs):
+            _download_abs_path_button(
+                "Download generated PDF",
+                pdf_abs,
+                key="dl_just_generated",
             )
-
-            chosen_labels = st.multiselect(
-                "Select audits to include in the final PDF",
-                options=labels,
-                default=labels,
-                key="rep_pick_audits",
-            )
-            chosen_ids = [label_to_id[l] for l in chosen_labels if l in label_to_id]
-            chosen_audits = [engine.get_audit(aid) for aid in chosen_ids]
-            chosen_audits = [a for a in chosen_audits if a]
-
-            st.divider()
-            st.subheader("Admin Summary (required for each audit)")
-
-            admin_summaries: Dict[str, str] = {}
-            missing = 0
-
-            for a in chosen_audits:
-                aid = a.get("audit_id")
-                title = (a.get("title") or "Untitled").strip()
-                dept = (a.get("audited_department") or "-").strip()
-                auditor = (a.get("assigned_auditor") or "-").strip()
-
-                st.markdown(f"**{title}**  \nDept: {dept}  \nAuditor: {auditor}")
-                txt = st.text_area(
-                    f"Summary for audit: {title}",
-                    value="",
-                    height=110,
-                    key=f"rep_sum_{aid}",
-                ).strip()
-
-                if not txt:
-                    missing += 1
-                admin_summaries[str(aid)] = txt
-                st.divider()
-
-            filename = st.text_input(
-                "Output filename (optional)",
-                placeholder="Final_Audit_Report_<auto>.pdf",
-                key="rep_filename",
-            ).strip() or None
-
-            if st.button("Generate PDF Report", type="primary", key="rep_generate_btn"):
-                if not chosen_audits:
-                    st.error("Please select at least one audit.")
-                elif missing > 0:
-                    st.error(f"Please fill admin summary for all selected audits. Missing: {missing}")
-                else:
-                    ok, msg, pdf_path = report_generator.generate_final_audit_report_pdf(
-                        generated_by=username,
-                        admin_summaries_by_audit_id=admin_summaries,
-                        include_statuses=statuses,
-                        output_filename=filename,
-                    )
-                    if ok and pdf_path:
-                        st.success(msg)
-                        try:
-                            with open(pdf_path, "rb") as f:
-                                st.download_button(
-                                    "Download generated PDF",
-                                    data=f.read(),
-                                    file_name=os.path.basename(pdf_path),
-                                    mime="application/pdf",
-                                    key=f"rep_dl_now_{os.path.basename(pdf_path)}",
-                                )
-                        except Exception:
-                            st.warning("Generated file exists but could not be opened for download.")
-                        st.rerun()
-                    else:
-                        st.error(msg)
+        st.rerun()
+    else:
+        st.error(msg)
 
         st.divider()
 
-    st.subheader("Generated Reports")
-    reports = report_generator.list_generated_reports()
+    # --------------------------------------------------------
+    # 3) Generated final PDFs list (role-aware)
+    # --------------------------------------------------------
+    st.subheader("Generated Final PDF Reports")
 
-    if not reports:
-        st.info("No reports generated yet.")
+    if not tenant_id:
+        st.info("Tenant not found in session. Please logout and login again.")
     else:
-        for r in reversed(reports):
-            file_name = r.get("file_name")
-            file_path = r.get("file_path")
-            report_id = r.get("report_id")
+        final_reports = _engine_call(
+            "list_final_generated_reports_for_user",
+            username=username,
+            role=role,
+        )
 
-            render_panel(
-                file_name or "Report",
-                f"Generated at: {r.get('generated_at')} | Generated by: {r.get('generated_by')}",
-            )
-            st.write("")
+        if not final_reports:
+            st.info("No generated final PDFs found yet.")
+        else:
+            for j, r in enumerate(final_reports, start=1):
+                rid = r.get("id")
+                fname = r.get("file_name") or "-"
+                created_at = r.get("created_at") or "-"
+                created_by = r.get("created_by") or "-"
+                with st.container(border=True):
+                    st.write(f"**{fname}**")
+                    st.write(f"Created at: {created_at}")
+                    st.write(f"Created by: {created_by}")
 
-            c1, c2 = st.columns([1, 1])
+                    abs_path = None
+                    try:
+                        abs_path = engine.resolve_final_report_pdf_abs_path(tenant_id, r.get("pdf_rel_path"))
+                    except Exception:
+                        abs_path = None
 
-            with c1:
-                try:
-                    with open(file_path, "rb") as f:
-                        st.download_button(
-                            label="Download PDF",
-                            data=f.read(),
-                            file_name=file_name,
-                            mime="application/pdf",
-                            key=f"dl_report_{report_id}",
-                        )
-                except Exception:
-                    st.warning("File not available on server.")
+                    if abs_path and os.path.exists(abs_path):
+                        _download_abs_path_button("Download PDF", abs_path, key=f"dl_final_{j}")
+                    else:
+                        st.warning("PDF not found on server.")
 
-            with c2:
-                if role == "admin":
-                    if st.button("Delete Report", key=f"del_report_{report_id}"):
-                        ok, msg = report_generator.delete_generated_report(str(report_id))
-                        if ok:
-                            st.success(msg)
-                            st.rerun()
-                        else:
-                            st.error(msg)
+                    if role == "admin":
+                        if st.button("Delete PDF", key=f"del_final_{j}"):
+                            ok, msg = _engine_call("delete_final_generated_report", rid)
+                            if ok:
+                                st.success(msg)
+                                st.rerun()
+                            else:
+                                st.error(msg)
 
-            st.divider()
 
 # ============================================================
 # Auditor Pages
 # ============================================================
-if role == "auditor" and page == "My Audits":
+elif role == "auditor" and page == "My Audits":
     st.title("My Audits")
     render_panel("Assigned Audits", "Only audits assigned to your account are visible here.")
     st.write("")
 
     q = st.text_input("Search my audits", placeholder="Search by title, department, status, ID")
-    my = [a for a in all_audits if a.get("assigned_auditor") == person_name]
     render_status_legend()
     st.write("")
-    audits_table(my, search_query=q)
+    audits_table(my_audits, search_query=q)
 
     st.info("Rule: Upload at least one report, submit it, then you can complete the audit.")
 
+
 elif role == "auditor" and page == "My Timetable":
     import pandas as pd
-    from datetime import timedelta
 
     st.title("My Timetable")
     render_panel("Timetable View", "Slots assigned by Admin are displayed for the selected date range.")
@@ -1813,3 +1877,7 @@ elif role == "auditor" and page == "My Timetable":
             tdf = pd.DataFrame(today_rows, columns=["Date", "Time Slot", "Department to Audit", "Auditor"])
             tdf = tdf.sort_values(by=["Time Slot"])
             st.table(tdf[["Time Slot", "Department to Audit"]])
+
+else:
+    st.title("Page not implemented")
+    st.info("This menu item is present, but its page content has not been added yet.")

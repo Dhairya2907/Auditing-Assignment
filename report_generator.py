@@ -1,36 +1,19 @@
 # report_generator.py
 # -----------------------------
-# Generates a single PDF report for CLOSED audits.
-# Reads audits via engine.list_audits() and engine.get_audit().
-# Does NOT modify audits.json (read-only).
+# Generates a single PDF report for selected audits (typically Report Submitted / Closed).
+# Reads audits via engine.get_audit().
+# Writes the PDF under the tenant folder and registers it in engine's Generated Final Reports store.
 #
-# Output:
-#   uploads/generated_reports/<filename>.pdf
-#   uploads/generated_reports/generated_reports.json  (metadata log)
-#
-# Dependencies:
-#   reportlab (already available in your environment per your setup)
-# -----------------------------
-
-from __future__ import annotations
-
-# report_generator.py
-# -----------------------------
-# Generates a single PDF report for CLOSED audits.
-# Reads audits via engine.list_audits() and engine.get_audit().
-# Does NOT modify audits.json (read-only).
-#
-# Output:
-#   uploads/generated_reports/<filename>.pdf
-#   uploads/generated_reports/generated_reports.json  (metadata log)
+# Output PDF (per-tenant):
+#   uploads/tenants/<tenant_id>/generated_reports/<filename>.pdf
 #
 # Dependencies:
 #   reportlab
 # -----------------------------
 
+from __future__ import annotations
+
 import os
-import json
-import uuid
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
@@ -40,15 +23,7 @@ from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas
 from reportlab.lib.utils import simpleSplit
 
-# Your existing modules
 import engine
-
-
-# -----------------------------
-# Config
-# -----------------------------
-REPORTS_DIR = os.path.join(engine.UPLOADS_DIR, "generated_reports")
-REPORTS_INDEX_FILE = os.path.join(REPORTS_DIR, "generated_reports.json")
 
 
 # -----------------------------
@@ -66,88 +41,57 @@ def _ensure_dir(path: str) -> None:
     os.makedirs(path, exist_ok=True)
 
 
-def _read_json(path: str, default):
-    if not os.path.exists(path):
-        return default
+def _tenant_generated_reports_dir(tenant_id: str) -> str:
+    # Keep consistent with engine's multi-tenant storage layout
+    return os.path.join(engine.UPLOADS_DIR, "tenants", str(tenant_id), "generated_reports")
+
+
+def _audit_primary_key(a: Dict) -> str:
+    """
+    Return the canonical identifier stored in the audit payload.
+    Some versions store "audit_id", some store "id".
+    """
+    return _safe_text(a.get("audit_id")) or _safe_text(a.get("id"))
+
+
+def _engine_get_audit(audit_id: str, tenant_id: str) -> Optional[Dict]:
+    """
+    Call engine.get_audit in a backwards compatible way.
+    """
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return default
+        return engine.get_audit(audit_id, tenant_id=tenant_id)
+    except TypeError:
+        # older engine without tenant_id
+        return engine.get_audit(audit_id)
 
 
-def _write_json(path: str, data) -> None:
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-    os.replace(tmp, path)
-
-
-def ensure_reports_storage() -> None:
-    _ensure_dir(REPORTS_DIR)
-    if not os.path.exists(REPORTS_INDEX_FILE):
-        _write_json(REPORTS_INDEX_FILE, {"reports": []})
-
-
-def list_generated_reports() -> List[Dict]:
-    ensure_reports_storage()
-    data = _read_json(REPORTS_INDEX_FILE, {"reports": []})
-    reports = data.get("reports", [])
-    return reports if isinstance(reports, list) else []
-
-def delete_generated_report(report_id: str) -> Tuple[bool, str]:
+def _engine_register_final_report(
+    *,
+    tenant_id: str,
+    created_by: str,
+    pdf_rel_path: str,
+    included_audit_ids: List[str],
+    admin_summaries_by_audit_id: Dict[str, str],
+) -> Tuple[bool, str]:
     """
-    Deletes a generated report entry and its PDF file.
-    Admin-only enforcement must be done in app.py.
+    Call engine.register_final_generated_report in a backwards compatible way.
     """
-    ensure_reports_storage()
-    report_id = str(report_id or "").strip()
-    if not report_id:
-        return False, "Invalid report id."
-
-    data = _read_json(REPORTS_INDEX_FILE, {"reports": []})
-    reports = data.get("reports", [])
-    if not isinstance(reports, list) or not reports:
-        return False, "No reports found."
-
-    kept: List[Dict] = []
-    target: Optional[Dict] = None
-
-    for r in reports:
-        if not isinstance(r, dict):
-            continue
-        if str(r.get("report_id", "")).strip() == report_id:
-            target = r
-        else:
-            kept.append(r)
-
-    if not target:
-        return False, "Report not found."
-
-    # Delete PDF file (best effort)
-    file_path = str(target.get("file_path", "") or "").strip()
-    if file_path and os.path.exists(file_path):
-        try:
-            os.remove(file_path)
-        except Exception as e:
-            return False, f"Could not delete PDF file: {e}"
-
-    # Save updated index
-    data["reports"] = kept
-    _write_json(REPORTS_INDEX_FILE, data)
-
-    return True, "Report deleted successfully."
-
-
-def _append_report_index(entry: Dict) -> None:
-    ensure_reports_storage()
-    data = _read_json(REPORTS_INDEX_FILE, {"reports": []})
-    if not isinstance(data, dict):
-        data = {"reports": []}
-    if not isinstance(data.get("reports", []), list):
-        data["reports"] = []
-    data["reports"].append(entry)
-    _write_json(REPORTS_INDEX_FILE, data)
+    try:
+        return engine.register_final_generated_report(
+            tenant_id=tenant_id,
+            created_by=created_by,
+            pdf_rel_path=pdf_rel_path,
+            included_audit_ids=included_audit_ids,
+            admin_summaries_by_audit_id=admin_summaries_by_audit_id,
+        )
+    except TypeError:
+        # older engine without tenant_id param
+        return engine.register_final_generated_report(
+            created_by=created_by,
+            pdf_rel_path=pdf_rel_path,
+            included_audit_ids=included_audit_ids,
+            admin_summaries_by_audit_id=admin_summaries_by_audit_id,
+        )
 
 
 def get_audit_display_date(audit: Dict) -> str:
@@ -164,6 +108,19 @@ def get_audit_display_date(audit: Dict) -> str:
         or _safe_text(audit.get("created_at"))
         or "-"
     )
+
+
+def _audit_display_title(a: Dict) -> str:
+    return _safe_text(a.get("title")) or "Untitled"
+
+
+def _audit_display_dept(a: Dict) -> str:
+    # Your app uses audited_department
+    return _safe_text(a.get("audited_department")) or _safe_text(a.get("department")) or "-"
+
+
+def _audit_display_auditor(a: Dict) -> str:
+    return _safe_text(a.get("assigned_auditor")) or _safe_text(a.get("auditor")) or "-"
 
 
 # -----------------------------
@@ -218,114 +175,164 @@ def _ensure_space_or_page(
     return y
 
 
+def _kv_line(k: str, v: str) -> str:
+    return f"{k}: {(_safe_text(v) or '-')}"
+
+
 # -----------------------------
 # Core: Generate PDF
 # -----------------------------
 def generate_final_audit_report_pdf(
     *,
+    tenant_id: str,
     generated_by: str,
+    selected_audit_ids: List[str],
     admin_summaries_by_audit_id: Dict[str, str],
-    include_statuses: Optional[List[str]] = None,
     output_filename: Optional[str] = None,
 ) -> Tuple[bool, str, Optional[str]]:
     """
-    Creates one PDF report for audits matching include_statuses (default: ["Closed"]).
+    Creates one PDF report for selected audits.
 
     admin_summaries_by_audit_id:
-      { "<audit_id>": "<summary text written by admin>" }
+      dict where keys MUST be the same IDs passed in selected_audit_ids.
+      { "<selected_id>": "<summary text written by admin>" }
 
     Returns:
-      (ok, message, saved_pdf_path_or_None)
+      (ok, message, saved_pdf_abs_path_or_None)
     """
-    engine.ensure_seed_files()
-    ensure_reports_storage()
+    tenant_id = str(tenant_id or "").strip()
+    if not tenant_id:
+        return False, "Tenant not found in session. Please logout and login again.", None
 
-    statuses = include_statuses or ["Closed"]
-    statuses_lower = {s.strip().lower() for s in statuses if str(s).strip()}
+    # Validate selection
+    ids = [str(x or "").strip() for x in (selected_audit_ids or []) if str(x or "").strip()]
+    ids = list(dict.fromkeys(ids))  # de-dup, preserve order
+    if not ids:
+        return False, "No audits selected.", None
 
-    all_audits = engine.list_audits()
-    selected = [
-        a for a in all_audits
-        if str(a.get("status", "")).strip().lower() in statuses_lower
-    ]
+    # Load audits while preserving the selected ID for summary mapping
+    audits: List[Dict] = []
+    missing_ids: List[str] = []
 
-    if not selected:
-        return False, "No audits found for selected statuses.", None
+    for selected_id in ids:
+        a = _engine_get_audit(selected_id, tenant_id)
+        if a:
+            a["_selected_id"] = str(selected_id)
+            audits.append(a)
+        else:
+            missing_ids.append(selected_id)
+
+    if not audits:
+        if missing_ids:
+            return False, "Selected audits were not found.", None
+        return False, "No audits selected.", None
 
     # Sort audits: by date then title then dept then auditor
     def _sort_key(a: Dict):
         dt = get_audit_display_date(a)
-        title = _safe_text(a.get("title")).lower()
-        dept = _safe_text(a.get("audited_department")).lower()
-        auditor = _safe_text(a.get("assigned_auditor")).lower()
+        title = _audit_display_title(a).lower()
+        dept = _audit_display_dept(a).lower()
+        auditor = _audit_display_auditor(a).lower()
         return (dt, title, dept, auditor)
 
-    selected.sort(key=_sort_key)
+    audits.sort(key=_sort_key)
 
     # File name
     if not output_filename:
         stamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
         output_filename = f"Final_Audit_Report_{stamp}.pdf"
+    if not output_filename.lower().endswith(".pdf"):
+        output_filename = output_filename + ".pdf"
 
-    pdf_path = os.path.join(REPORTS_DIR, output_filename)
+    # Ensure tenant report folder
+    reports_dir = _tenant_generated_reports_dir(tenant_id)
+    _ensure_dir(reports_dir)
+
+    pdf_abs_path = os.path.join(reports_dir, output_filename)
 
     # Build PDF
-    c = canvas.Canvas(pdf_path, pagesize=A4)
+    c = canvas.Canvas(pdf_abs_path, pagesize=A4)
     w, h = A4
     max_w = w - 36 * mm
 
+    # -------------------------
     # Cover page
+    # -------------------------
     y = h - 22 * mm
     c.setFont("Helvetica-Bold", 18)
     c.drawString(18 * mm, y, "Final Audit Report")
     y -= 10 * mm
 
     c.setFont("Helvetica", 11)
-    c.drawString(18 * mm, y, f"Generated at: {_now_iso()}")
+    c.drawString(18 * mm, y, _kv_line("Generated at", _now_iso()))
     y -= 6 * mm
-    c.drawString(18 * mm, y, f"Generated by: {_safe_text(generated_by) or '-'}")
+    c.drawString(18 * mm, y, _kv_line("Generated by", generated_by))
+    y -= 6 * mm
+    c.drawString(18 * mm, y, _kv_line("Tenant", tenant_id))
     y -= 10 * mm
+
+    if missing_ids:
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(18 * mm, y, "Warning: Some selected audits were not found and were skipped:")
+        y -= 6 * mm
+        c.setFont("Helvetica", 9)
+        for mid in missing_ids:
+            y = _ensure_space_or_page(c, y, needed=8 * mm, page_title="Final Audit Report")
+            y = _draw_wrapped_text(c, f"- {mid}", 20 * mm, y, max_w, font_name="Helvetica", font_size=9, leading=11)
+        y -= 6 * mm
 
     c.setFont("Helvetica-Bold", 12)
-    c.drawString(18 * mm, y, f"Included audits (status: {', '.join(statuses)}): {len(selected)}")
+    c.drawString(18 * mm, y, f"Included audits: {len(audits)}")
     y -= 10 * mm
 
-    # Simple overall list
+    # Summary list
     c.setFont("Helvetica-Bold", 10)
     c.drawString(18 * mm, y, "Summary List")
     y -= 6 * mm
 
     c.setFont("Helvetica", 9)
-    for idx, a in enumerate(selected, start=1):
-        label = f"{idx}. {(_safe_text(a.get('title')) or 'Untitled')} | {(_safe_text(a.get('audited_department')) or '-')}"
-        label += f" | Auditor: {(_safe_text(a.get('assigned_auditor')) or '-')}"
-        label += f" | Date: {get_audit_display_date(a)}"
+    for idx, a in enumerate(audits, start=1):
+        audit_key = _audit_primary_key(a) or _safe_text(a.get("_selected_id"))
+        label = (
+            f"{idx}. {_audit_display_title(a)} | {_audit_display_dept(a)}"
+            f" | Auditor: {_audit_display_auditor(a)}"
+            f" | Date: {get_audit_display_date(a)}"
+            f" | ID: {audit_key}"
+        )
         y = _ensure_space_or_page(c, y, needed=10 * mm, page_title="Final Audit Report")
         y = _draw_wrapped_text(c, label, 18 * mm, y, max_w, font_name="Helvetica", font_size=9, leading=11)
 
-    # Start details pages
+    # -------------------------
+    # Details pages
+    # -------------------------
     c.showPage()
     y = h - 18 * mm
 
-    for idx, a in enumerate(selected, start=1):
-        audit_id = _safe_text(a.get("audit_id"))
-        title = _safe_text(a.get("title")) or "Untitled"
-        auditor = _safe_text(a.get("assigned_auditor")) or "-"
-        dept = _safe_text(a.get("audited_department")) or "-"
+    for idx, a in enumerate(audits, start=1):
+        selected_id = _safe_text(a.get("_selected_id"))
+        audit_key = _audit_primary_key(a) or selected_id
+        title = _audit_display_title(a)
+        auditor = _audit_display_auditor(a)
+        dept = _audit_display_dept(a)
         date_str = get_audit_display_date(a)
+        status = _safe_text(a.get("status")) or "-"
 
         # Header per audit
-        y = _ensure_space_or_page(c, y, needed=45 * mm, page_title="")
+        y = _ensure_space_or_page(c, y, needed=55 * mm, page_title="")
         c.setFont("Helvetica-Bold", 13)
         c.drawString(18 * mm, y, f"Audit {idx}: {title}")
         y -= 8 * mm
 
         c.setFont("Helvetica", 10)
-        c.drawString(18 * mm, y, f"Auditor Name: {auditor}")
+        c.drawString(18 * mm, y, _kv_line("Audit ID", audit_key))
         y -= 6 * mm
-        c.drawString(18 * mm, y, f"Audited Department: {dept}")
+        c.drawString(18 * mm, y, _kv_line("Status", status))
         y -= 6 * mm
-        c.drawString(18 * mm, y, f"Date: {date_str}")
+        c.drawString(18 * mm, y, _kv_line("Auditor Name", auditor))
+        y -= 6 * mm
+        c.drawString(18 * mm, y, _kv_line("Audited Department", dept))
+        y -= 6 * mm
+        c.drawString(18 * mm, y, _kv_line("Date", date_str))
         y -= 6 * mm
 
         # Admin Summary
@@ -334,11 +341,12 @@ def generate_final_audit_report_pdf(
         c.drawString(18 * mm, y, "Summary (Admin)")
         y -= 6 * mm
 
-        summary = _safe_text(admin_summaries_by_audit_id.get(audit_id, "")).strip()
+        # IMPORTANT: map summary by SELECTED ID (matches app.py selection)
+        summary = _safe_text((admin_summaries_by_audit_id or {}).get(selected_id, "")).strip()
         if not summary:
             summary = "(No summary provided.)"
 
-        y = _ensure_space_or_page(c, y, needed=20 * mm, page_title=title)
+        y = _ensure_space_or_page(c, y, needed=22 * mm, page_title=title)
         y = _draw_wrapped_text(c, summary, 18 * mm, y, max_w, font_name="Helvetica", font_size=10, leading=13)
         y -= 4 * mm
 
@@ -377,7 +385,16 @@ def generate_final_audit_report_pdf(
 
                     block = f"{sr}. {chk}\nObservation: {obs}\nEvidence: {evd}"
                     y = _ensure_space_or_page(c, y, needed=18 * mm, page_title=title)
-                    y = _draw_wrapped_text(c, block, 20 * mm, y, max_w - 2 * mm, font_name="Helvetica", font_size=9, leading=11)
+                    y = _draw_wrapped_text(
+                        c,
+                        block,
+                        20 * mm,
+                        y,
+                        max_w - 2 * mm,
+                        font_name="Helvetica",
+                        font_size=9,
+                        leading=11,
+                    )
                     y -= 2 * mm
 
                 y -= 3 * mm
@@ -414,16 +431,23 @@ def generate_final_audit_report_pdf(
 
     c.save()
 
-    # Write metadata entry
-    entry = {
-        "report_id": str(uuid.uuid4()),
-        "file_name": output_filename,
-        "file_path": pdf_path,
-        "generated_at": _now_iso(),
-        "generated_by": _safe_text(generated_by),
-        "statuses_included": statuses,
-        "audit_ids_included": [(_safe_text(a.get("audit_id"))) for a in selected if _safe_text(a.get("audit_id"))],
-    }
-    _append_report_index(entry)
+    # Register in engine
+    pdf_rel_path = os.path.join("generated_reports", output_filename)
 
-    return True, f"Report generated: {output_filename}", pdf_path
+    included_ids = []
+    for a in audits:
+        included_ids.append(_audit_primary_key(a) or _safe_text(a.get("_selected_id")))
+
+    ok, msg = _engine_register_final_report(
+        tenant_id=tenant_id,
+        created_by=_safe_text(generated_by),
+        pdf_rel_path=pdf_rel_path,
+        included_audit_ids=[_safe_text(x) for x in included_ids if _safe_text(x)],
+        # store summaries by selected_id (matches app.py keys)
+        admin_summaries_by_audit_id={str(k): str(v) for k, v in (admin_summaries_by_audit_id or {}).items()},
+    )
+
+    if not ok:
+        return False, f"PDF created but could not be registered: {msg}", pdf_abs_path
+
+    return True, f"Report generated: {output_filename}", pdf_abs_path
