@@ -29,68 +29,16 @@ import report_generator  # final PDF report generation
 def inject_enterprise_css():
     st.markdown(
         """
-        <style>
-/* =========================
-   HARD FIX: Text readability
-   ========================= */
+<style>
+/* minimal, doesn't change the "earlier" look */
+footer { visibility: hidden; }
+#MainMenu { visibility: hidden; }
 
-/* Force readable text almost everywhere */
-.stApp, .stApp * {
-  color: #0f172a;
-}
-
-/* Markdown, captions, labels, help text */
-.stMarkdown, .stMarkdown * ,
-.stCaption, .stCaption * ,
-label, label * ,
-small, small * ,
-p, span, li, div {
-  color: #0f172a !important;
-}
-
-/* Sidebar text */
-section[data-testid="stSidebar"],
-section[data-testid="stSidebar"] * {
-  color: #0f172a !important;
-}
-
-/* Metrics, headers, and common Streamlit containers */
-div[data-testid="stMetric"] * ,
-header, header * {
-  color: #0f172a !important;
-}
-
-/* Inputs: text color + background */
-input, textarea {
-  color: #0f172a !important;
-  background: #ffffff !important;
-  caret-color: #0f172a !important;
-}
-
-/* BaseWeb (Selectbox, Multiselect) text color */
-div[data-baseweb="select"] * ,
-div[data-baseweb="popover"] * ,
-div[role="listbox"] * ,
-div[role="option"] * {
-  color: #0f172a !important;
-}
-
-/* Date input popup calendar text */
-div[data-baseweb="calendar"] * {
-  color: #0f172a !important;
-}
-
-/* Dataframe/table text */
-div[data-testid="stDataFrame"] *,
-table, th, td {
-  color: #0f172a !important;
-}
-
-/* If any links look washed out */
-a, a * {
-  color: #1e3a8a !important;
-}
+/* Only sidebar text safety, no global overrides */
+section[data-testid="stSidebar"] { background: #ffffff; }
+section[data-testid="stSidebar"] * { color: #0f172a !important; }
 </style>
+
 
         """,
         unsafe_allow_html=True,
