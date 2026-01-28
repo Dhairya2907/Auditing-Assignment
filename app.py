@@ -30,157 +30,68 @@ def inject_enterprise_css():
     st.markdown(
         """
         <style>
-        /* ============ Enterprise Authority Theme ============ */
+/* =========================
+   HARD FIX: Text readability
+   ========================= */
 
-        /* Page background */
-        .stApp {
-            background: #f6f8fb;
-            color: #0f172a;
-        }
+/* Force readable text almost everywhere */
+.stApp, .stApp * {
+  color: #0f172a;
+}
 
-        /* Main container spacing */
-        .block-container {
-            padding-top: 1.25rem;
-            padding-bottom: 2.25rem;
-            max-width: 1250px;
-        }
+/* Markdown, captions, labels, help text */
+.stMarkdown, .stMarkdown * ,
+.stCaption, .stCaption * ,
+label, label * ,
+small, small * ,
+p, span, li, div {
+  color: #0f172a !important;
+}
 
-        /* Sidebar */
-        section[data-testid="stSidebar"] {
-            background: #ffffff;
-            border-right: 1px solid #e5e7eb;
-        }
+/* Sidebar text */
+section[data-testid="stSidebar"],
+section[data-testid="stSidebar"] * {
+  color: #0f172a !important;
+}
 
-        /* Typography */
-        h1, h2, h3, h4 {
-            color: #0f172a;
-            letter-spacing: 0.2px;
-        }
-        .subtle {
-            color: #475569;
-            font-size: 13px;
-        }
+/* Metrics, headers, and common Streamlit containers */
+div[data-testid="stMetric"] * ,
+header, header * {
+  color: #0f172a !important;
+}
 
-        /* Header bar container */
-        .topbar {
-            background: #ffffff;
-            border: 1px solid #e5e7eb;
-            border-radius: 14px;
-            padding: 14px 16px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            box-shadow: 0 8px 18px rgba(15, 23, 42, 0.06);
-            margin-bottom: 14px;
-        }
-        .brand {
-            display: flex;
-            flex-direction: column;
-            gap: 2px;
-        }
-        .brand .title {
-            font-size: 16px;
-            font-weight: 900;
-            color: #0f172a;
-        }
-        .brand .tagline {
-            font-size: 12px;
-            color: #64748b;
-        }
+/* Inputs: text color + background */
+input, textarea {
+  color: #0f172a !important;
+  background: #ffffff !important;
+  caret-color: #0f172a !important;
+}
 
-        /* Role chip */
-        .chip {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            padding: 7px 10px;
-            border-radius: 999px;
-            border: 1px solid #e5e7eb;
-            background: #f8fafc;
-            color: #0f172a;
-            font-size: 12px;
-            font-weight: 800;
-            white-space: nowrap;
-        }
-        .dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 999px;
-            background: #1e3a8a;
-        }
+/* BaseWeb (Selectbox, Multiselect) text color */
+div[data-baseweb="select"] * ,
+div[data-baseweb="popover"] * ,
+div[role="listbox"] * ,
+div[role="option"] * {
+  color: #0f172a !important;
+}
 
-        /* Panels */
-        .panel {
-            background: #ffffff;
-            border: 1px solid #e5e7eb;
-            border-radius: 14px;
-            padding: 14px 14px;
-            box-shadow: 0 8px 18px rgba(15, 23, 42, 0.05);
-        }
-        .panel-title {
-            font-weight: 900;
-            font-size: 14px;
-            margin-bottom: 6px;
-            color: #0f172a;
-        }
-        .panel-subtitle {
-            font-size: 12px;
-            color: #64748b;
-            margin-bottom: 0px;
-        }
+/* Date input popup calendar text */
+div[data-baseweb="calendar"] * {
+  color: #0f172a !important;
+}
 
-        /* KPI tiles */
-        .kpi-row {
-            display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
-            gap: 12px;
-            margin-bottom: 10px;
-        }
-        .kpi {
-            background: #ffffff;
-            border: 1px solid #e5e7eb;
-            border-radius: 14px;
-            padding: 12px 12px;
-            box-shadow: 0 8px 18px rgba(15, 23, 42, 0.05);
-        }
-        .kpi .label { font-size: 12px; color: #64748b; font-weight: 900; }
-        .kpi .value { font-size: 22px; color: #0f172a; font-weight: 950; margin-top: 4px; }
-        .kpi .meta  { font-size: 12px; color: #475569; margin-top: 4px; }
+/* Dataframe/table text */
+div[data-testid="stDataFrame"] *,
+table, th, td {
+  color: #0f172a !important;
+}
 
-        /* Buttons (primary enterprise navy) */
-        .stButton button {
-            background: #1e3a8a !important;
-            color: #ffffff !important;
-            border: 1px solid #1e3a8a !important;
-            border-radius: 10px !important;
-            font-weight: 900 !important;
-            padding: 0.55rem 0.95rem !important;
-        }
-        .stButton button:hover { background: #1d4ed8 !important; border-color: #1d4ed8 !important; }
+/* If any links look washed out */
+a, a * {
+  color: #1e3a8a !important;
+}
+</style>
 
-        /* Inputs */
-        .stTextInput input, .stSelectbox div, .stMultiSelect div, .stTextArea textarea, .stDateInput input {
-            border-radius: 10px !important;
-        }
-
-        /* Dataframe */
-        div[data-testid="stDataFrame"] {
-            border: 1px solid #e5e7eb;
-            border-radius: 14px;
-            overflow: hidden;
-        }
-
-        /* Hide Streamlit footer */
-        footer { visibility: hidden; }
-
-        /* Responsive KPI row */
-        @media (max-width: 1100px) {
-            .kpi-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-        }
-        @media (max-width: 650px) {
-            .kpi-row { grid-template-columns: repeat(1, minmax(0, 1fr)); }
-        }
-        </style>
         """,
         unsafe_allow_html=True,
     )
