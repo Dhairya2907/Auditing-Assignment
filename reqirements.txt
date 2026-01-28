@@ -1,3 +1,4 @@
-streamlit
-reportlab
-python-dateutil
+streamlit==1.36.0
+reportlab==4.2.2
+pillow==10.4.0
+python-dateutil==2.9.0.post0
