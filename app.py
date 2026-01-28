@@ -1,4 +1,15 @@
 import streamlit as st
+
+def _rerun():
+    try:
+        st.rerun()  # newer Streamlit
+    except Exception:
+        try:
+            st.rerun()
+ # older Streamlit (if available)
+        except Exception:
+            st.stop()  # last fallback
+
 from typing import List, Dict, Set, Optional
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
@@ -1602,10 +1613,30 @@ elif (role == "admin" and page == "Audit Details") or (role == "auditor" and pag
 # ============================================================
 elif page == "Reports":
     st.title("Reports")
-    st.caption("View submitted audit files and generated final PDFs. Admin can generate and delete final PDFs; auditors can only view/download.")
+    st.caption(
+        "View submitted audit files and generated final PDFs. "
+        "Admin can generate and delete final PDFs; auditors can only view/download."
+    )
 
-    tenant_id = st.session_state.auth.get("tenant_id")
+    import os
+    import engine
+    import report_generator
 
+    # ------------------------------------------------------------------
+    # Session essentials
+    # ------------------------------------------------------------------
+    auth = st.session_state.get("auth", {})
+    tenant_id = auth.get("tenant_id")
+    username = auth.get("username")
+    role = auth.get("role")
+
+    if not tenant_id:
+        st.error("Tenant not found in session. Please log in again.")
+        st.stop()
+
+    # ------------------------------------------------------------------
+    # Helper: download button from absolute path
+    # ------------------------------------------------------------------
     def _download_abs_path_button(label: str, abs_path: str, key: str):
         try:
             with open(abs_path, "rb") as f:
@@ -1613,208 +1644,210 @@ elif page == "Reports":
                     label=label,
                     data=f.read(),
                     file_name=os.path.basename(abs_path),
-                    mime="application/octet-stream",
+                    mime="application/pdf",
                     key=key,
                 )
-        except Exception:
-            st.warning(f"Download unavailable: {os.path.basename(abs_path)}")
+        except Exception as e:
+            st.warning(f"Download unavailable: {e}")
+
+    # ==============================================================
+    # ADMIN: Generate Final Audit Report
+    # ==============================================================
+    if role == "admin":
+        st.subheader("Generate Final Audit Report")
+
+        # Filter audits by status
+        status_filter = st.selectbox(
+            "Select audit status",
+            options=["Report Submitted", "Closed"],
+            index=0,
+        )
+
+        all_audits = engine.list_audits(tenant_id=tenant_id)
+        eligible_audits = [
+            a for a in all_audits if a.get("status") == status_filter
+        ]
+
+        if not eligible_audits:
+            st.info(f"No audits with status '{status_filter}'.")
+        else:
+            labels, label_to_id = engine.get_audit_dropdown_options(tenant_id=tenant_id)
+
+            selected_labels = st.multiselect(
+                "Select audits to include",
+                options=[
+                    lbl for lbl in labels
+                    if label_to_id[lbl] in {a["audit_id"] for a in eligible_audits}
+                ],
+            )
+
+            selected_ids = [label_to_id[lbl] for lbl in selected_labels]
+
+            admin_summaries_by_audit_id = {}
+
+            for aid in selected_ids:
+                st.markdown(f"**Summary for audit `{aid}`**")
+                admin_summaries_by_audit_id[aid] = st.text_area(
+                    label="",
+                    key=f"summary_{aid}",
+                    height=120,
+                )
+
+            output_name = st.text_input(
+                "Optional PDF filename (leave blank for auto-name)",
+                placeholder="Final_Audit_Report_Q1_2026.pdf",
+            )
+
+            if st.button("Generate Final Report", type="primary"):
+                with st.spinner("Generating PDF..."):
+                    ok, msg, pdf_path = report_generator.generate_final_audit_report_pdf(
+                        tenant_id=tenant_id,
+                        generated_by=username,
+                        selected_audit_ids=selected_ids,
+                        admin_summaries_by_audit_id=admin_summaries_by_audit_id,
+                        output_filename=output_name or None,
+                    )
+
+                if ok:
+                    st.success(msg)
+                    _rerun()
+                else:
+                    st.error(msg)
+
+        st.divider()
+
+    # ==============================================================
+    # VIEW & DOWNLOAD GENERATED FINAL REPORTS (ADMIN + AUDITOR)
+    # ==============================================================
+    st.subheader("Generated Final Reports")
+
+    reports = engine.list_final_generated_reports_for_user(
+        username=username,
+        role=role,
+        tenant_id=tenant_id,
+    )
+
+    if not reports:
+        st.info("No generated final reports available.")
+    else:
+        for r in reports:
+            st.markdown(f"### Generated on {r['created_at']}")
+            st.write("Created by:", r["created_by"])
+            st.write("Summary:", r["summary"])
+
+            abs_path = engine.resolve_final_report_pdf_abs_path(
+                tenant_id, r["pdf_rel_path"]
+            )
+
+            if not os.path.exists(abs_path):
+                st.error("PDF file missing on server.")
+            else:
+                _download_abs_path_button(
+                    label="Download PDF",
+                    abs_path=abs_path,
+                    key=f"download_{r['id']}",
+                )
+
+            # Admin-only delete
+            if role == "admin":
+                if st.button(
+                    "Delete Report",
+                    key=f"delete_{r['id']}",
+                ):
+                    ok, msg = engine.delete_final_generated_report(
+                        report_id=r["id"],
+                        requester_role=role,
+                        tenant_id=tenant_id,
+                    )
+                    if ok:
+                        st.success(msg)
+                        _rerun()
+                    else:
+                        st.error(msg)
+
+            st.divider()
+
 
     # --------------------------------------------------------
     # 1) Submitted files (per audit)
     # --------------------------------------------------------
-    st.subheader("Submitted Audit Files")
-
-    visible_audits = my_audits if role == "auditor" else all_audits
-
-    labels, label_to_id = build_audit_dropdown(
-        visible_audits,
-        restrict_to_auditor=(role == "auditor"),
-        auditor_name=person_name,
-    )
-
-    if not labels:
-        st.info("No audits available.")
-    else:
-        pick = st.selectbox("Select Audit", options=labels, key="reports_audit_pick")
-        audit_id = label_to_id[pick]
-        audit = _engine_call("get_audit", audit_id)
-
-        if not audit:
-            st.error("Audit not found.")
-        else:
-            st.write("**Audit ID:**", audit.get("audit_id"))
-            st.write("**Title:**", audit.get("title") or "-")
-            st.write("**Department:**", audit.get("audited_department") or "-")
-            st.write("**Auditor:**", audit.get("assigned_auditor") or "-")
-            st.write("**Status:**", audit.get("status") or "-")
-
-            reports = audit.get("reports", []) or []
-            if not reports:
-                st.info("No submitted files for this audit yet.")
-            else:
-                for i, r in enumerate(reports, start=1):
-                    file_name = r.get("file_name") or f"report_{i}"
-                    saved_path = r.get("saved_path") or ""
-                    uploaded_by = r.get("uploaded_by") or "-"
-                    uploaded_at = r.get("uploaded_at") or "-"
-
-                    with st.container(border=True):
-                        st.write(f"**{file_name}**")
-                        st.write(f"Uploaded by: {uploaded_by}")
-                        st.write(f"Uploaded at: {uploaded_at}")
-
-                        if saved_path and os.path.exists(saved_path):
-                            _download_abs_path_button(
-                                label=f"Download {file_name}",
-                                abs_path=saved_path,
-                                key=f"dl_submitted_{audit_id}_{i}",
-                            )
-                        else:
-                            st.warning("File path not found on server.")
-
-    st.divider()
 
     # --------------------------------------------------------
     # 2) Admin: Generate final PDF
     # --------------------------------------------------------
-    if role == "admin":
-        st.subheader("Generate Final Audit PDF")
-        st.caption("Select audits and write a short admin summary for each selected audit; then generate one consolidated PDF.")
-
-  # --------------------------------------------------------
-# Generate Final Audit PDF (STATUS-BASED, NO NUMBER INPUT)
+    # --------------------------------------------------------
+# Admin: Generate final PDF (STATUS FILTER -> SELECT AUDITS -> SUMMARIES)
 # --------------------------------------------------------
+if role == "admin":
+    st.subheader("Generate Final Audit PDF")
+    st.caption("Select a report status, pick audits under that status, add admin summaries, then generate one consolidated PDF.")
 
-status_choice = st.selectbox(
-    "Report Status",
-    ["Report Submitted", "Closed"],
-    index=0,
-    key="final_pdf_status"
-)
+    tenant_id = st.session_state.auth.get("tenant_id")
 
-desired_status = status_choice.lower()
+    STATUS_OPTIONS = ["Assigned", "In Progress", "Report Submitted", "Closed"]
+    status_pick = st.selectbox("Report Status", STATUS_OPTIONS, index=2)
 
-eligible = [
-    a for a in all_audits
-    if str(a.get("status", "")).strip().lower() == desired_status
-]
+    def _norm(s: str) -> str:
+        return " ".join(str(s or "").strip().lower().split())
 
-if not eligible:
-    st.warning(f"No audits found with status: {status_choice}")
-    st.stop()
+    wanted = _norm(status_pick)
 
-labels2, label_to_id2 = build_audit_dropdown(
-    eligible,
-    restrict_to_auditor=False,
-    auditor_name=None,
-)
+    audits_by_status = [
+        a for a in all_audits
+        if _norm(a.get("status")) == wanted
+    ]
 
-selected_labels = st.multiselect(
-    "Select audits",
-    options=labels2,
-    key="final_pdf_select_audits",
-)
-
-selected_ids = [label_to_id2[lbl] for lbl in selected_labels]
-
-if not selected_ids:
-    st.info("Select at least one audit to continue.")
-    st.stop()
-
-# One summary box PER selected audit
-st.markdown("### Admin Summaries (one per audit)")
-
-summaries: Dict[str, str] = {}
-for aid in selected_ids:
-    a = _engine_call("get_audit", aid)
-    title = (a or {}).get("title") or aid
-
-    summaries[aid] = st.text_area(
-        f"Summary for: {title}",
-        key=f"final_summary_{aid}",
-        placeholder="Write audit summary, key findings, conclusion, and next actions.",
-        height=140,
-    )
-
-out_name = st.text_input(
-    "Output filename (optional)",
-    value=f"Final_Audit_Report_{datetime.now().strftime('%Y-%m-%d')}.pdf",
-)
-
-if st.button("Generate Final PDF", type="primary"):
-    missing = [aid for aid, txt in summaries.items() if not (txt or "").strip()]
-    if missing:
-        st.error("Please write a summary for every selected audit.")
-        st.stop()
-
-    ok, msg, pdf_abs = report_generator.generate_final_audit_report_pdf(
-        tenant_id=tenant_id,
-        generated_by=username,
-        selected_audit_ids=selected_ids,
-        admin_summaries_by_audit_id=summaries,
-        output_filename=out_name.strip() or None,
-    )
-
-    if ok:
-        st.success(msg)
-        if pdf_abs and os.path.exists(pdf_abs):
-            _download_abs_path_button(
-                "Download generated PDF",
-                pdf_abs,
-                key="dl_just_generated",
-            )
-        st.rerun()
+    if not audits_by_status:
+        st.warning(f"No audits found with status: {status_pick}")
     else:
-        st.error(msg)
-
-        st.divider()
-
-    # --------------------------------------------------------
-    # 3) Generated final PDFs list (role-aware)
-    # --------------------------------------------------------
-    st.subheader("Generated Final PDF Reports")
-
-    if not tenant_id:
-        st.info("Tenant not found in session. Please logout and login again.")
-    else:
-        final_reports = _engine_call(
-            "list_final_generated_reports_for_user",
-            username=username,
-            role=role,
+        labels2, label_to_id2 = build_audit_dropdown(
+            audits_by_status,
+            restrict_to_auditor=False,
+            auditor_name=None,
         )
 
-        if not final_reports:
-            st.info("No generated final PDFs found yet.")
+        chosen_labels = st.multiselect("Select audits", options=labels2)
+        selected_ids = [label_to_id2[lbl] for lbl in chosen_labels] if chosen_labels else []
+
+        summaries = {}
+        if selected_ids:
+            st.markdown("### Admin summaries")
+            for aid in selected_ids:
+                a = _engine_call("get_audit", aid)
+                summaries[aid] = st.text_area(
+                    f"Summary for: {(a or {}).get('title') or aid}",
+                    height=120,
+                )
+
+            out_name = st.text_input(
+                "Output filename (optional)",
+                placeholder="Final_Audit_Report_YYYY-MM-DD.pdf",
+            )
+
+            if st.button("Generate Final PDF", type="primary"):
+                ok, msg, pdf_abs = report_generator.generate_final_audit_report_pdf(
+                    tenant_id=tenant_id,
+                    generated_by=st.session_state.auth.get("username"),
+                    selected_audit_ids=selected_ids,
+                    admin_summaries_by_audit_id=summaries,
+                    output_filename=(out_name.strip() if out_name.strip() else None),
+                )
+
+                if ok:
+                    st.success(msg)
+                    if pdf_abs and os.path.exists(pdf_abs):
+                        with open(pdf_abs, "rb") as f:
+                            st.download_button(
+                                "Download generated PDF",
+                                data=f.read(),
+                                file_name=os.path.basename(pdf_abs),
+                                mime="application/pdf",
+                            )
+                    st.rerun()
+                else:
+                    st.error(msg)
         else:
-            for j, r in enumerate(final_reports, start=1):
-                rid = r.get("id")
-                fname = r.get("file_name") or "-"
-                created_at = r.get("created_at") or "-"
-                created_by = r.get("created_by") or "-"
-                with st.container(border=True):
-                    st.write(f"**{fname}**")
-                    st.write(f"Created at: {created_at}")
-                    st.write(f"Created by: {created_by}")
-
-                    abs_path = None
-                    try:
-                        abs_path = engine.resolve_final_report_pdf_abs_path(tenant_id, r.get("pdf_rel_path"))
-                    except Exception:
-                        abs_path = None
-
-                    if abs_path and os.path.exists(abs_path):
-                        _download_abs_path_button("Download PDF", abs_path, key=f"dl_final_{j}")
-                    else:
-                        st.warning("PDF not found on server.")
-
-                    if role == "admin":
-                        if st.button("Delete PDF", key=f"del_final_{j}"):
-                            ok, msg = _engine_call("delete_final_generated_report", rid)
-                            if ok:
-                                st.success(msg)
-                                st.rerun()
-                            else:
-                                st.error(msg)
+            st.info("Select at least one audit to generate a report.")
 
 
 # ============================================================

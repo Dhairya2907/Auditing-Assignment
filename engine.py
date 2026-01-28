@@ -95,7 +95,9 @@ def _normalize_text(s: str) -> str:
 
 def ensure_dirs() -> None:
     os.makedirs(UPLOADS_DIR, exist_ok=True)
-    os.makedirs(os.path.dirname(SQLITE_DB_PATH), exist_ok=True)
+    db_dir = os.path.dirname(SQLITE_DB_PATH)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
 
 def _uuid() -> str:
     return str(uuid.uuid4())
@@ -1515,7 +1517,7 @@ def _save_updated_audit(updated: Dict[str, Any], tenant_id: Optional[str] = None
     reports_json = json.dumps(updated.get("reports", []) or [])
     checklists_json = json.dumps(updated.get("checklists", {}) or {})
 
-    exists = _fetch_one("select audit_id from audits where audit_id = ?;", (updated.get("audit_id"),))
+    exists = _fetch_one("select audit_id from audits where tenant_id = ? and audit_id = ?;", (tenant_id, updated.get("audit_id"),))
     if exists:
         _execute(
             """
@@ -1832,17 +1834,34 @@ def complete_audit(audit_id: str, auditor_name: str, tenant_id: Optional[str] = 
 def register_final_generated_report(
     *,
     created_by: str,
-    summary: str,
-    audit_ids: List[str],
     pdf_rel_path: str,
-    allowed_users: Optional[List[str]] = None,
     tenant_id: Optional[str] = None,
+    # Newer/older callers may use either name:
+    included_audit_ids: Optional[List[str]] = None,
+    audit_ids: Optional[List[str]] = None,
+    # App/admin summary fields:
+    summary: str = "",
+    admin_summaries_by_audit_id: Optional[Dict[str, str]] = None,
+    # Access control. If None, defaults to "ALL_AUDITORS" behaviour via list_final_generated_reports_for_user().
+    allowed_users: Optional[List[str]] = None,
+    **_ignored_kwargs,
 ) -> Tuple[bool, Optional[Dict[str, Any]], str]:
     """
     Register a final generated report (PDF already created by report_generator).
-    - audit_ids: list of audit_id strings
-    - pdf_rel_path: relative to tenant root, e.g. "generated_reports/final_report_xxx.pdf"
-    - allowed_users: if None, auto = [created_by] + assigned auditors for those audits
+
+    Backwards/forwards compatible with multiple calling conventions:
+      - report_generator.py may call with:
+          included_audit_ids=[...], admin_summaries_by_audit_id={...}
+      - other callers may call with:
+          audit_ids=[...], summary="..."
+
+    Visibility requirement (current project):
+      - Any generated final report must be visible to *all auditors* (and admin).
+      - Only admin can delete final reports.
+
+    Notes:
+      - We store the per-audit admin summaries (if provided) inside the 'summary' field as JSON,
+        while preserving a plain summary string if you use that.
     """
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
 
@@ -1850,18 +1869,20 @@ def register_final_generated_report(
     if not created_by:
         return False, None, "created_by is required."
 
-    audit_ids = [str(x or "").strip() for x in (audit_ids or []) if str(x or "").strip()]
-    audit_ids = list(dict.fromkeys(audit_ids))
-    if not audit_ids:
+    # Accept either parameter name
+    ids = audit_ids if audit_ids is not None else included_audit_ids
+    audit_ids_clean = [str(x or "").strip() for x in (ids or []) if str(x or "").strip()]
+    audit_ids_clean = list(dict.fromkeys(audit_ids_clean))
+    if not audit_ids_clean:
         return False, None, "At least one audit must be selected."
 
     # Validate audits exist for this tenant
     rows = _fetch_all(
-        "select audit_id from audits where tenant_id = ? and audit_id in ({})".format(",".join(["?"] * len(audit_ids))),
-        tuple([tenant_id] + audit_ids),
+        "select audit_id from audits where tenant_id = ? and audit_id in ({})".format(",".join(["?"] * len(audit_ids_clean))),
+        tuple([tenant_id] + audit_ids_clean),
     )
     found = {str(r["audit_id"]) for r in rows}
-    missing = [a for a in audit_ids if a not in found]
+    missing = [a for a in audit_ids_clean if a not in found]
     if missing:
         return False, None, f"Invalid audit IDs: {missing}"
 
@@ -1875,14 +1896,18 @@ def register_final_generated_report(
     if not os.path.exists(abs_path):
         return False, None, "PDF file not found on disk. Generate the PDF first, then register."
 
-    # Determine allowed users
-    if allowed_users is None:
-        auto_auditors = _audit_ids_to_auditors(audit_ids, tenant_id)
-        allowed_users = [created_by] + auto_auditors
+    # Store summary. If per-audit summaries are provided, store as JSON for later parsing.
+    stored_summary = _normalize_text(summary)
+    if admin_summaries_by_audit_id:
+        payload = {
+            "summary": stored_summary,
+            "admin_summaries_by_audit_id": {str(k): str(v) for k, v in admin_summaries_by_audit_id.items()},
+        }
+        stored_summary = json.dumps(payload, ensure_ascii=False)
 
-    allowed_users = _normalize_users_list(allowed_users)
-    if not allowed_users:
-        return False, None, "allowed_users cannot be empty."
+    # allowed_users is kept for compatibility, but auditors see all reports anyway.
+    # If someone still wants to constrain, they can pass allowed_users and your app can enforce it.
+    allowed_users = _normalize_users_list(allowed_users or ["ALL_AUDITORS"])
 
     report_id = _uuid()
     row = {
@@ -1890,8 +1915,8 @@ def register_final_generated_report(
         "tenant_id": tenant_id,
         "created_by": created_by,
         "created_at": _now_iso(),
-        "summary": summary or "",
-        "audit_ids_json": json.dumps(audit_ids),
+        "summary": stored_summary,
+        "audit_ids_json": json.dumps(audit_ids_clean),
         "allowed_users_json": json.dumps(allowed_users),
         "pdf_rel_path": pdf_rel_path,
         "is_deleted": 0,
@@ -1913,15 +1938,18 @@ def register_final_generated_report(
 
     return True, row, "Final report registered."
 
-
 def list_final_generated_reports_for_user(
     username: str,
     role: str,
     tenant_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Admin: all non-deleted
-    Others: only where username is in allowed_users_json
+    Visibility rules:
+      - Admin: sees all non-deleted final reports.
+      - Auditor: sees all non-deleted final reports (requirement: visible to all auditors).
+      - Manager: also sees all non-deleted final reports.
+
+    Only admin can delete (enforced in delete_final_generated_report()).
     """
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
     username = _normalize_text(username)
@@ -1944,9 +1972,9 @@ def list_final_generated_reports_for_user(
             allowed = json.loads(r.get("allowed_users_json") or "[]")
         except Exception:
             allowed = []
-        allowed_norm = {str(x).strip().lower() for x in (allowed or []) if str(x).strip()}
 
-        if role == "admin" or (username and username.lower() in allowed_norm):
+        # Current requirement: show to all auditors and admin/manager
+        if role in {"admin", "auditor", "manager"}:
             out.append(
                 {
                     "id": r["id"],
@@ -1958,8 +1986,24 @@ def list_final_generated_reports_for_user(
                     "pdf_rel_path": r["pdf_rel_path"],
                 }
             )
-    return out
+            continue
 
+        # Fallback (if you ever add more roles later)
+        allowed_norm = {str(x).strip().lower() for x in (allowed or []) if str(x).strip()}
+        if username and username.lower() in allowed_norm:
+            out.append(
+                {
+                    "id": r["id"],
+                    "created_by": r["created_by"],
+                    "created_at": r["created_at"],
+                    "summary": r["summary"],
+                    "audit_ids": json.loads(r.get("audit_ids_json") or "[]"),
+                    "allowed_users": allowed,
+                    "pdf_rel_path": r["pdf_rel_path"],
+                }
+            )
+
+    return out
 
 def get_final_generated_report(
     report_id: str,
@@ -1994,7 +2038,7 @@ def get_final_generated_report(
         allowed = []
     allowed_norm = {str(x).strip().lower() for x in (allowed or []) if str(x).strip()}
 
-    if role != "admin" and (not username or username.lower() not in allowed_norm):
+    if role not in {"admin", "auditor", "manager"} and (not username or username.lower() not in allowed_norm):
         return None
 
     return {
