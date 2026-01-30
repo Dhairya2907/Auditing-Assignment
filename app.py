@@ -1895,3 +1895,4 @@ else:
         page_audit_details()
     elif page == "Reports":
         page_reports()
+  
