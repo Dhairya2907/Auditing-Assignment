@@ -1,5 +1,20 @@
 import streamlit as st
 
+# -----------------------------
+# Session State Defaults
+# -----------------------------
+def _ensure_auth_state():
+    """Ensure st.session_state.auth exists to prevent AttributeError on first load."""
+    if "auth" not in st.session_state or not isinstance(st.session_state.get("auth"), dict):
+        st.session_state["auth"] = {}
+    auth = st.session_state["auth"]
+    auth.setdefault("logged_in", False)
+    auth.setdefault("role", "auditor")
+    auth.setdefault("username", "")
+    auth.setdefault("tenant_id", "default")
+
+_ensure_auth_state()
+
 def _rerun():
     try:
         st.rerun()  # newer Streamlit
@@ -10,7 +25,7 @@ def _rerun():
         except Exception:
             st.stop()  # last fallback
 
-from typing import List, Dict, Set, Optional
+from typing import Any, List, Dict, Set, Optional
 from datetime import datetime, date, timedelta
 from zoneinfo import ZoneInfo
 import os
@@ -19,8 +34,21 @@ import inspect
 import glob
 
 import engine
-import timetable  # timetable.py must be in same folder
-import report_generator  # final PDF report generation
+
+# Optional modules (kept optional to avoid hard-crashes on missing deps in deployment)
+try:
+    import timetable  # timetable.py must be in same folder
+    _HAS_TIMETABLE = True
+except Exception:
+    timetable = None  # type: ignore
+    _HAS_TIMETABLE = False
+
+try:
+    import report_generator  # final PDF report generation (depends on reportlab)
+    _HAS_REPORT_GEN = True
+except Exception:
+    report_generator = None  # type: ignore
+    _HAS_REPORT_GEN = False
 
 
 # ============================================================
@@ -165,6 +193,125 @@ h3 { margin-top: 0.7rem; margin-bottom: 0.3rem; }
     flex-wrap: wrap;
     gap: 10px;
     align-items: center;
+}
+
+
+/* ===============================
+   Calendar (modern year view)
+   =============================== */
+.cal-year {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+@media (max-width: 1100px) {
+  .cal-year { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 750px) {
+  .cal-year { grid-template-columns: repeat(1, minmax(0, 1fr)); }
+}
+.cal-month {
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
+  border-radius: 16px;
+  padding: 12px 12px 10px 12px;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+}
+.cal-month-head {
+  display:flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+.cal-month-name {
+  font-weight: 900;
+  font-size: 16px;
+  color: #0f172a;
+}
+.cal-month-meta {
+  font-size: 12px;
+  color: #64748b;
+  font-weight: 700;
+}
+.cal-weekdays {
+  display:grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.cal-weekday {
+  font-size: 11px;
+  color:#64748b;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  text-align:center;
+}
+.cal-days {
+  display:grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 6px;
+}
+.cal-cell {
+  border: 1px solid #eef2f7;
+  border-radius: 12px;
+  min-height: 74px;
+  padding: 6px 6px 8px 6px;
+  background: #fbfdff;
+  position: relative;
+  overflow: hidden;
+}
+.cal-cell.muted {
+  background: #f8fafc;
+  color: #94a3b8;
+}
+.cal-cell:hover {
+  border-color:#cbd5e1;
+  box-shadow: 0 8px 16px rgba(15,23,42,0.06);
+}
+.cal-daynum {
+  font-size: 12px;
+  font-weight: 900;
+  color: #0f172a;
+}
+.cal-cell.muted .cal-daynum {
+  color: #94a3b8;
+}
+.cal-pills {
+  margin-top: 6px;
+  display:flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.cal-pill {
+  border-radius: 999px;
+  border: 1px solid #bfdbfe;
+  background: #eff6ff;
+  color: #1e3a8a;
+  padding: 2px 8px;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cal-pill.alt {
+  border-color:#a7f3d0;
+  background:#ecfdf5;
+  color:#065f46;
+}
+.cal-pill.warn {
+  border-color:#fed7aa;
+  background:#fff7ed;
+  color:#9a3412;
+}
+.cal-more {
+  font-size: 11px;
+  font-weight: 800;
+  color: #475569;
+  padding-left: 4px;
 }
 
 </style>
@@ -482,29 +629,22 @@ def _engine_call(func_name: str, *args, **kwargs):
     """
     Calls engine.<func_name> and injects tenant_id automatically
     if the function supports it.
+
+    Important: avoids passing tenant_id twice (positional + keyword).
     """
     fn = getattr(engine, func_name)
     try:
         sig = inspect.signature(fn)
-        if "tenant_id" in sig.parameters:
-            kwargs.setdefault("tenant_id", _current_tenant_id())
+        params = list(sig.parameters.keys())
+        if "tenant_id" in params:
+            # Only inject tenant_id if caller did not already supply it.
+            if "tenant_id" not in kwargs:
+                tenant_pos = params.index("tenant_id")
+                if len(args) <= tenant_pos:
+                    kwargs["tenant_id"] = _current_tenant_id()
     except Exception:
         pass
     return fn(*args, **kwargs)
-
-
-# ============================================================
-# Session state
-# ============================================================
-if "auth" not in st.session_state:
-    st.session_state.auth = {
-        "logged_in": False,
-        "tenant_code": "default",
-        "tenant_id": None,
-        "username": None,
-        "role": None,
-        "person_name": None,
-    }
 
 
 def logout():
@@ -748,6 +888,421 @@ if not st.session_state.auth["logged_in"]:
 
 
 # ============================================================
+# Audit Calender (Year view)
+# ============================================================
+import calendar as _calendar
+import pandas as _pd
+
+
+def page_audit_calendar():
+    st.title("Audit Calendar")
+    st.caption("Create audits and view them in a clean monthly calendar.")
+
+    tenant_id = st.session_state.auth.get("tenant_id")
+    username = st.session_state.auth.get("username", "")
+
+    # ---------- Styles ----------
+    st.markdown(
+        """
+        <style>
+        .cal-wrap { background:#ffffff; border:1px solid #e5e7eb; border-radius:18px; padding:14px 14px 10px 14px;
+                    box-shadow:0 10px 24px rgba(15,23,42,0.06); }
+        .cal-head { display:flex; justify-content:space-between; align-items:center; gap:10px; padding:6px 6px 12px 6px; }
+        .cal-title { font-weight:900; color:#0f172a; font-size:16px; letter-spacing:0.2px; }
+        .cal-sub { color:#64748b; font-size:12px; margin-top:2px; }
+        .cal-grid { display:grid; grid-template-columns:repeat(7, 1fr); gap:10px; padding:8px 6px 8px 6px; }
+        .cal-dow { color:#64748b; font-size:11px; font-weight:800; text-transform:uppercase; letter-spacing:0.08em;
+                   padding:6px 10px; border-radius:12px; background:#f8fafc; border:1px solid #e5e7eb; text-align:center; }
+        .cal-cell { border:1px solid #e5e7eb; border-radius:16px; padding:10px; min-height:92px; background:#ffffff;
+                    box-shadow:0 6px 14px rgba(15,23,42,0.04); }
+        .cal-cell.muted { background:#fbfdff; border-style:dashed; opacity:0.7; }
+        .cal-day { display:flex; align-items:center; justify-content:space-between; margin-bottom:8px; }
+        .cal-num { font-weight:900; color:#0f172a; font-size:13px; }
+        .cal-badge { font-size:11px; font-weight:800; padding:4px 8px; border-radius:999px; border:1px solid #e5e7eb;
+                     background:#f8fafc; color:#334155; }
+        .cal-chip { display:block; padding:6px 8px; border-radius:12px; margin-top:6px;
+                    font-size:12px; font-weight:750; line-height:1.15; border:1px solid #e2e8f0;
+                    background:linear-gradient(180deg,#ffffff 0%, #f8fafc 100%);
+                    color:#0f172a; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        .cal-chip small { display:block; font-weight:700; color:#64748b; margin-top:2px; }
+        .cal-chip.planned { border-color:#bfdbfe; background:linear-gradient(180deg,#eff6ff 0%, #ffffff 100%); }
+        .cal-chip.progress { border-color:#fde68a; background:linear-gradient(180deg,#fffbeb 0%, #ffffff 100%); }
+        .cal-chip.closed { border-color:#bbf7d0; background:linear-gradient(180deg,#ecfdf5 0%, #ffffff 100%); }
+        .cal-chip.other { border-color:#e5e7eb; }
+        .cal-more { color:#64748b; font-size:12px; margin-top:8px; font-weight:700; }
+        .cal-legend { display:flex; gap:8px; flex-wrap:wrap; padding:0 6px 10px 6px; }
+        .cal-dot { width:10px; height:10px; border-radius:999px; display:inline-block; margin-right:6px; }
+        .cal-pill { display:inline-flex; align-items:center; gap:6px; padding:6px 10px; border-radius:999px;
+                    border:1px solid #e5e7eb; background:#ffffff; color:#334155; font-size:12px; font-weight:750; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # ---------- Create audit ----------
+    with st.expander("Create a calendar audit", expanded=False):
+        with st.form("create_calendar_audit_form"):
+            c1, c2, c3 = st.columns([1, 1, 2])
+            with c1:
+                start = st.date_input("Start date *", value=None, key="cal_start")
+            with c2:
+                end = st.date_input("End date *", value=None, key="cal_end")
+            with c3:
+                title = st.text_input("Audit title *", key="cal_title")
+
+            scope = st.text_area("Scope *", height=90, key="cal_scope")
+
+            submitted = st.form_submit_button("Create audit", use_container_width=True)
+            if submitted:
+                if start is None or end is None:
+                    st.error("Start date and end date are required.")
+                elif not str(title).strip():
+                    st.error("Audit title is required.")
+                elif not str(scope).strip():
+                    st.error("Scope is required.")
+                elif end < start:
+                    st.error("End date cannot be before start date.")
+                else:
+                    audit, msg = _engine_call(
+                        "create_audit_calendar",
+                        title=str(title).strip(),
+                        scope=str(scope).strip(),
+                        start_date=start.isoformat(),
+                        end_date=end.isoformat(),
+                        created_by=username,
+                    )
+                    if audit:
+                        st.success(msg)
+                        _rerun()
+                    else:
+                        st.error(msg)
+
+    # ---------- Filters ----------
+    today = date.today()
+    f1, f2, f3, f4 = st.columns([1, 1, 1, 2])
+    with f1:
+        year = st.selectbox(
+            "Year",
+            options=list(range(today.year - 2, today.year + 6)),
+            index=2,
+            key="cal_year",
+        )
+    with f2:
+        month = st.selectbox(
+            "Month",
+            options=list(range(1, 13)),
+            index=today.month - 1,
+            format_func=lambda m: _calendar.month_name[m],
+            key="cal_month",
+        )
+    with f3:
+        view = st.selectbox("View", options=["Calendar", "List"], index=0, key="cal_view")
+    with f4:
+        q = st.text_input("Search", placeholder="Type to filter by title, scope, or owner", key="cal_search")
+
+    cal = _engine_call("list_audit_calendar") or []
+
+    # ---------- Normalize + filter ----------
+    def _safe_date(s, default="1900-01-01"):
+        try:
+            return date.fromisoformat(str(s or default))
+        except Exception:
+            return date.fromisoformat(default)
+
+    def _status_bucket(a):
+        s = str(a.get("status", "")).strip().lower()
+        if s in ("planned", "open", "assigned", "scheduled"):
+            return "planned"
+        if s in ("in progress", "in-progress", "progress", "ongoing", "active"):
+            return "progress"
+        if s in ("closed", "done", "complete", "completed"):
+            return "closed"
+        return "other"
+
+    def _matches(a):
+        if not q:
+            return True
+        blob = " ".join(
+            [
+                str(a.get("title", "")),
+                str(a.get("scope", "")),
+                str(a.get("created_by", "")),
+                str(a.get("auditor", "")),
+                str(a.get("owner", "")),
+            ]
+        ).lower()
+        return q.lower() in blob
+
+    items = []
+    for a in cal:
+        sd = _safe_date(a.get("start_date"))
+        ed = _safe_date(a.get("end_date"))
+        if ed < sd:
+            sd, ed = ed, sd
+        month_start = date(year, month, 1)
+        month_end = date(year, month, _calendar.monthrange(year, month)[1])
+        if ed < month_start or sd > month_end:
+            continue
+        if not _matches(a):
+            continue
+        items.append({**a, "_sd": sd, "_ed": ed, "_bucket": _status_bucket(a)})
+
+    # ---------- Legend ----------
+    st.markdown(
+        """
+        <div class="cal-legend">
+          <span class="cal-pill"><span class="cal-dot" style="background:#93c5fd"></span>Planned</span>
+          <span class="cal-pill"><span class="cal-dot" style="background:#fbbf24"></span>In progress</span>
+          <span class="cal-pill"><span class="cal-dot" style="background:#34d399"></span>Closed</span>
+          <span class="cal-pill"><span class="cal-dot" style="background:#cbd5e1"></span>Other</span>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    if view == "List":
+        if not items:
+            st.info("No audits found for this month.")
+            return
+        items_sorted = sorted(items, key=lambda x: (x["_sd"], x.get("title", "")))
+        for a in items_sorted:
+            sd, ed = a["_sd"], a["_ed"]
+            title = str(a.get("title", "Untitled")).strip() or "Untitled"
+            scope = str(a.get("scope", "")).strip()
+            owner = str(a.get("created_by", "")).strip() or str(a.get("auditor", "")).strip()
+            st.markdown(
+                f"""
+                <div class="cal-wrap" style="margin-bottom:10px;">
+                  <div class="cal-head">
+                    <div>
+                      <div class="cal-title">{title}</div>
+                      <div class="cal-sub">{sd.strftime('%d %b %Y')} → {ed.strftime('%d %b %Y')} • Owner: {owner or '—'}</div>
+                    </div>
+                    <div class="cal-badge">{str(a.get('status','Planned')).strip() or 'Planned'}</div>
+                  </div>
+                  <div style="padding:0 6px 6px 6px; color:#334155; font-size:13px;">
+                    {scope if scope else "<span style='color:#94a3b8;'>No scope provided.</span>"}
+                  </div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+        return
+
+    month_start = date(year, month, 1)
+    first_weekday, days_in_month = _calendar.monthrange(year, month)  # Monday=0
+    offset = first_weekday
+    total_cells = offset + days_in_month
+    rows = (total_cells + 6) // 7
+
+    by_day = {}
+    for a in items:
+        d = max(a["_sd"], month_start)
+        last = min(a["_ed"], date(year, month, days_in_month))
+        while d <= last:
+            by_day.setdefault(d, []).append(a)
+            d = d + timedelta(days=1)
+
+    dow = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+
+    st.markdown(f"<div class='cal-wrap'>", unsafe_allow_html=True)
+    st.markdown(
+        f"""
+        <div class="cal-head">
+          <div>
+            <div class="cal-title">{_calendar.month_name[month]} {year}</div>
+            <div class="cal-sub">Showing {len(items)} audit(s) in this month</div>
+          </div>
+          <div class="cal-badge">{tenant_id or "Tenant"}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    st.markdown("<div class='cal-grid'>" + "".join([f"<div class='cal-dow'>{d}</div>" for d in dow]) + "</div>", unsafe_allow_html=True)
+
+    cells_html = ["<div class='cal-grid'>"]
+    day_num = 1
+    for r in range(rows):
+        for c in range(7):
+            cell_idx = r * 7 + c
+            if cell_idx < offset or day_num > days_in_month:
+                cells_html.append("<div class='cal-cell muted'></div>")
+                continue
+
+            d = date(year, month, day_num)
+            day_num += 1
+
+            is_today = (d == today)
+            badge_html = "<span class='cal-badge'>Today</span>" if is_today else ""
+
+            audits = sorted(by_day.get(d, []), key=lambda x: (x["_sd"], str(x.get("title",""))))
+            max_show = 3
+            chips = []
+            for a in audits[:max_show]:
+                bucket = a["_bucket"]
+                title = (str(a.get("title", "Untitled")).strip() or "Untitled")
+                sd, ed = a["_sd"], a["_ed"]
+                if sd == ed:
+                    tag = "Single day"
+                elif d == sd:
+                    tag = f"Starts • {sd.strftime('%d %b')} → {ed.strftime('%d %b')}"
+                elif d == ed:
+                    tag = f"Ends • {sd.strftime('%d %b')} → {ed.strftime('%d %b')}"
+                else:
+                    tag = f"Ongoing • {sd.strftime('%d %b')} → {ed.strftime('%d %b')}"
+                scope = str(a.get("scope", "")).strip()
+                tooltip = (title + (" | " + scope if scope else "")).replace('"', "&quot;")
+                chips.append(f"<span class='cal-chip {bucket}' title=\"{tooltip}\">{title}<small>{tag}</small></span>")
+
+            more = f"<div class='cal-more'>+{len(audits) - max_show} more</div>" if len(audits) > max_show else ""
+
+            cells_html.append(
+                "<div class='cal-cell'>"
+                f"<div class='cal-day'><span class='cal-num'>{d.day}</span>{badge_html}</div>"
+                + "".join(chips)
+                + more
+                + "</div>"
+            )
+
+    cells_html.append("</div>")
+    st.markdown("".join(cells_html), unsafe_allow_html=True)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# ============================================================
+# Audit Plan (Working days only)
+# ============================================================
+
+def page_audit_plan():
+    st.title("Audit Plan")
+    st.caption("Select an audit from Audit Calender, then create a working-days schedule with 1-hour slots.")
+
+    tenant_id = st.session_state.auth.get("tenant_id")
+    username = st.session_state.auth.get("username", "")
+
+    cal = _engine_call("list_audit_calendar") or []
+    if not cal:
+        st.info("No audits found in Audit Calender. Create an audit first.")
+        return
+
+    labels = []
+    by_label = {}
+    for a in cal:
+        label = f"{a.get('title','')} ({a.get('start_date','')} -> {a.get('end_date','')})"
+        labels.append(label)
+        by_label[label] = a
+
+    sel_label = st.selectbox("Select Audit", options=labels)
+    audit = by_label[sel_label]
+    calendar_audit_id = audit.get("id")
+
+    st.markdown(
+        "<div style='padding:12px;border:1px solid #e5e7eb;border-radius:12px;background:#ffffff;'>"
+        + f"<div style='font-weight:800;color:#0f172a;'>{audit.get('title','')}</div>"
+        + f"<div style='color:#475569;font-size:13px;'>{audit.get('start_date','')} -> {audit.get('end_date','')}</div>"
+        + f"<div style='color:#0f172a;margin-top:6px;'><b>Scope:</b> {audit.get('scope','')}</div>"
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+    st.write("")
+
+    plan = _engine_call("get_audit_plan_by_calendar_audit", calendar_audit_id=calendar_audit_id)
+
+    with st.form("plan_create_form"):
+        days_default = int(plan["working_days"]) if plan and plan.get("working_days") else 1
+        days = st.number_input("How many working days will the audit run? *", min_value=1, step=1, value=days_default)
+        create_btn = st.form_submit_button("Create / Reset Plan")
+        if create_btn:
+            p, msg = _engine_call(
+                "create_or_reset_audit_plan",
+                calendar_audit_id=calendar_audit_id,
+                working_days=int(days),
+                created_by=username,
+            )
+            if p:
+                st.success(msg)
+                _rerun()
+            else:
+                st.error(msg)
+
+    plan = _engine_call("get_audit_plan_by_calendar_audit", calendar_audit_id=calendar_audit_id)
+    if not plan:
+        st.info("Create the audit plan to start scheduling.")
+        return
+
+    slots = plan.get("slots", []) or []
+    if not slots:
+        st.warning("No plan slots found; reset the plan once.")
+        return
+
+    df = _pd.DataFrame(
+        [
+            {
+                "Date": s.get("plan_date"),
+                "Slot Start": s.get("slot_start"),
+                "Slot End": s.get("slot_end"),
+                "Department": s.get("department") or "",
+                "Auditor": s.get("auditor_name") or "",
+                "Notes": s.get("notes") or "",
+            }
+            for s in slots
+        ]
+    )
+
+    dept_list = _engine_call("list_departments_simple", tenant_id) or []
+    dept_options = [""] + dept_list
+
+    people = _engine_call("load_people") or []
+    try:
+        all_auditors = sorted([p.name for p in people if getattr(p, "is_active", True)])
+    except Exception:
+        all_auditors = []
+    auditor_options = [""] + all_auditors
+
+    st.subheader("Plan schedule")
+    edited = st.data_editor(
+        df,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "Department": st.column_config.SelectboxColumn("Department", options=dept_options),
+            "Auditor": st.column_config.SelectboxColumn("Auditor", options=auditor_options),
+            "Notes": st.column_config.TextColumn("Notes"),
+        },
+        disabled=["Date", "Slot Start", "Slot End"],
+        key=f"plan_editor_{plan.get('plan_id')}",
+    )
+
+    c1, c2 = st.columns(2)
+    if c1.button("Auto-assign missing auditors"):
+        ok, msg = _engine_call("auto_assign_auditors", tenant_id, plan["plan_id"])
+        if ok:
+            st.success(msg)
+            _rerun()
+        else:
+            st.error(msg)
+
+    if c2.button("Save Audit Plan"):
+        payload = []
+        for _, row in edited.iterrows():
+            payload.append(
+                {
+                    "plan_date": row["Date"],
+                    "slot_start": row["Slot Start"],
+                    "slot_end": row["Slot End"],
+                    "department": row.get("Department", "") or "",
+                    "auditor_name": row.get("Auditor", "") or "",
+                    "notes": row.get("Notes", "") or "",
+                }
+            )
+        ok, msg = _engine_call("update_audit_plan_slots", tenant_id, plan["plan_id"], payload)
+        if ok:
+            st.success(msg)
+        else:
+            st.error(msg)
+
+
+# ============================================================
 # Main App
 # ============================================================
 require_login()
@@ -758,7 +1313,7 @@ person_name = st.session_state.auth.get("person_name")
 
 render_topbar(username=username, role=role)
 
-if role == "auditor" and person_name:
+if role == "auditor" and person_name and _HAS_TIMETABLE:
     show_auditor_timetable_reminder(person_name, remind_within_minutes=30)
 
 all_audits = _engine_call("list_audits")
@@ -804,7 +1359,7 @@ def page_admin_menu():
     st.write("")
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.button("Create & Assign Audit", use_container_width=True)
+        st.button("Audit Calender", use_container_width=True)
     with col2:
         st.button("Audit Plan", use_container_width=True)
     with col3:
@@ -877,6 +1432,29 @@ def page_admin_dashboard():
             }
         )
     st.dataframe(rows, use_container_width=True, hide_index=True)
+
+
+    # ----------------------------
+    # Scheduled Audits (from Audit Calender)
+    # ----------------------------
+    cal = _engine_call("list_audit_calendar") or []
+    if cal:
+        st.subheader("Scheduled Audits")
+        st.dataframe(
+            [
+                {
+                    "Start Date": a.get("start_date"),
+                    "End Date": a.get("end_date"),
+                    "Audit Title": a.get("title"),
+                    "Scope": a.get("scope"),
+                }
+                for a in cal
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+        st.caption("Created in Audit Calender; shown here for quick visibility.")
+        st.divider()
 
     st.divider()
     st.subheader("Security: Change Password")
@@ -1019,205 +1597,14 @@ def page_admin_auditors_skills():
 
 
 
+
 def page_admin_create_assign():
-    st.title("Create & Assign Audit")
-    st.caption(
-        "If department has no required skills defined yet, you can enter required skills and optionally save them as default."
-    )
-
-    skill_cat = get_skill_catalog()
-
-    col1, col2 = st.columns(2)
-    with col1:
-        title = st.text_input("Audit Title (optional)", placeholder="e.g., Internal Audit - Jan")
-
-        dept_choice = st.selectbox("Department to Audit", get_department_options_with_other(), key="ca_dept")
-        custom_dept = ""
-        if dept_choice == "Other":
-            custom_dept = st.text_input("Enter new department to audit", key="ca_new_dept")
-        target_dept = custom_dept.strip() if dept_choice == "Other" else dept_choice
-
-        allow_fallback = st.checkbox("Allow fresher fallback (still needs 100% skill match)", value=True)
-
-        st.markdown("**Required skills**")
-        existing_req = _engine_call("get_required_skills_for_dept", target_dept) if target_dept else set()
-
-        required_override: Set[str] | None = None
-        save_as_default = False
-
-        if existing_req:
-            st.success("Using saved required skills for this department.")
-            st.write([skill_cat.get(k, k) for k in sorted(existing_req)])
-        else:
-            st.warning("No required skills defined for this department yet.")
-            req_text = st.text_area(
-                "Enter required skill(s) for this audit (one per line). These can be saved as default for the department.",
-                placeholder="e.g.\nSupplier evaluation\nTraining record review",
-                height=120,
-            )
-            labels = [s.strip() for s in req_text.splitlines() if s.strip()]
-            req_keys: List[str] = []
-            for lbl in labels:
-                req_keys.append(_engine_call("ensure_skill_in_catalog", lbl))
-            required_override = set(req_keys) if req_keys else set()
-            save_as_default = st.checkbox("Save these required skills as default for this department", value=True)
-
-    with col2:
-        scope = st.text_area("Scope (optional)", placeholder="Write scope or checklist reference...")
-        due_date = st.text_input("Due Date (optional)", placeholder="YYYY-MM-DD")
-
-    if st.button("Assign Auditor", type="primary"):
-        if not target_dept:
-            st.error("Department is required.")
-        else:
-            audit, msg = _engine_call(
-                "create_and_assign_audit",
-                created_by=username,
-                target_dept=target_dept,
-                allow_fresher_fallback=allow_fallback,
-                title=title,
-                scope=scope,
-                due_date=due_date,
-                required_skill_keys_override=required_override
-                if required_override is not None and len(required_override) > 0
-                else None,
-                save_required_skills_as_default=save_as_default,
-            )
-            if not audit:
-                st.error(msg)
-            else:
-                st.success(msg)
-                st.json(audit)
-
-
+    st.title("Audit Calendar")
+    st.info("This module has been disabled. We will rebuild it later.")
 
 def page_admin_audit_plan():
-        import pandas as pd
-
-        st.title("Audit Plan")
-        st.caption(
-            "Rules: auditor cannot audit own department, 100% skill match, auditor FREE in main system, and FREE in selected slot."
-        )
-
-        skill_cat = get_skill_catalog()
-        SLOTS = timetable.generate_daily_slots("09:30", "18:30", 60)
-
-        selected_date = st.date_input("Select audit date", value=date.today(), key="tt_date")
-        date_str = selected_date.isoformat()
-
-        timetable.ensure_day_slots(date_str, SLOTS)
-
-        st.divider()
-
-        col1, col2 = st.columns([1, 2], gap="large")
-
-        with col1:
-            st.subheader("Add audit plan entry")
-
-            slot = st.selectbox("Time slot", SLOTS, key="tt_slot")
-
-            dept_choice = st.selectbox("Department to Audit", get_department_options_with_other(), key="tt_dept")
-            custom_dept = ""
-            if dept_choice == "Other":
-                custom_dept = st.text_input("Enter new department to audit", key="tt_custom_dept")
-            audited_dept = custom_dept.strip() if dept_choice == "Other" else dept_choice
-
-            required = _engine_call("get_required_skills_for_dept", audited_dept) if audited_dept else set()
-            save_as_default = False
-            if required:
-                st.write("Required skills (saved):")
-                st.write([skill_cat.get(k, k) for k in sorted(required)])
-            else:
-                st.warning("No required skills defined. Enter required skills for matching.")
-                req_text = st.text_area(
-                    "Required skill(s) (one per line)",
-                    key="tt_req_text",
-                    height=120,
-                    placeholder="e.g.\nProcess audit planning\nSupplier evaluation\nTraining record review",
-                )
-                labels = [s.strip() for s in req_text.splitlines() if s.strip()]
-                req_keys = [_engine_call("ensure_skill_in_catalog", lbl) for lbl in labels]
-                required = set(req_keys)
-                save_as_default = st.checkbox("Save as default required skills for this department", value=True, key="tt_save_req")
-
-            people = _engine_call("load_people")
-            state = _engine_call("load_state")
-            schedule = timetable.load_schedule()
-
-            eligible_names = []
-            for p in people:
-                if p.department.strip().lower() == audited_dept.strip().lower():
-                    continue
-                if required and (not required.issubset(set(p.skills))):
-                    continue
-                if engine.is_busy(state, p.name):
-                    continue
-                if timetable.auditor_is_busy(schedule, date_str, slot, p.name):
-                    continue
-                eligible_names.append(p.name)
-
-            eligible_names = sorted(set(eligible_names), key=lambda x: x.lower())
-
-            if not eligible_names:
-                st.warning("No eligible auditors available for this slot and department.")
-                auditor = None
-            else:
-                auditor = st.selectbox("Eligible Auditor", eligible_names, key="tt_auditor")
-
-            if st.button("Add to Audit Plan", type="primary", key="tt_add_btn"):
-                if not audited_dept:
-                    st.error("Department is required.")
-                elif not required:
-                    st.error("Required skills are required for matching.")
-                elif auditor is None:
-                    st.error("No eligible auditor available.")
-                else:
-                    _engine_call("add_department_to_catalog", audited_dept)
-                    if save_as_default:
-                        _engine_call("set_dept_required_skills", audited_dept, sorted(required))
-
-                    ok, msg = timetable.add_audit_to_slot(
-                        date_str=date_str,
-                        slot=slot,
-                        department=audited_dept,
-                        auditor=auditor
-                    )
-                    if ok:
-                        st.success(msg)
-                        st.rerun()
-                    else:
-                        st.error(msg)
-
-        with col2:
-            st.subheader(f"Audit Plan for {date_str}")
-
-            rows = timetable.flatten_timetable(date_str)
-            df = pd.DataFrame(rows, columns=["Date", "Time Slot", "Department", "Auditor", "Status"])
-            st.dataframe(df, use_container_width=True, hide_index=True)
-
-            st.markdown("### Remove a scheduled entry")
-            remove_slot = st.selectbox("Slot to remove from", SLOTS, key="tt_remove_slot")
-            audits_in_slot = timetable.get_slot_audits(date_str, remove_slot)
-
-            if not audits_in_slot:
-                st.info("No scheduled audits in this slot.")
-            else:
-                options = [f'{a["department"]} | {a["auditor"]}' for a in audits_in_slot]
-                pick = st.selectbox("Select entry", options, key="tt_remove_pick")
-
-                if st.button("Remove selected entry", key="tt_remove_btn"):
-                    dep, aud = [x.strip() for x in pick.split("|", 1)]
-                    ok, msg = timetable.remove_audit_from_slot(date_str, remove_slot, dep, aud)
-                    if ok:
-                        st.success(msg)
-                        st.rerun()
-                    else:
-                        st.error(msg)
-
-
-    # ============================================================
-    # Checklist pages
-    # ============================================================
+    st.title("Audit Plan")
+    st.info("This module has been disabled. We will rebuild it later.")
 
 def page_admin_checklist():
     st.title("Checklist (Admin)")
@@ -1674,7 +2061,11 @@ def page_reports():
 
             if st.button("Generate Final Report", type="primary"):
                 with st.spinner("Generating PDF..."):
-                    ok, msg, pdf_path = report_generator.generate_final_audit_report_pdf(
+                    if not _HAS_REPORT_GEN:
+                        st.error("PDF generation is unavailable because the report generator dependencies are missing (reportlab). Install reportlab in requirements.txt to enable PDF generation.")
+                        ok, msg, pdf_path = False, "report_generator unavailable", None
+                    else:
+                        ok, msg, pdf_path = report_generator.generate_final_audit_report_pdf(
                         tenant_id=tenant_id,
                         generated_by=username,
                         selected_audit_ids=selected_ids,
@@ -1817,9 +2208,9 @@ with st.sidebar:
             "",
             [
                 "Dashboard",
-                "Auditors & Skills",
-                "Create & Assign Audit",
+                "Audit Calender",
                 "Audit Plan",
+                "Auditors & Skills",
                 "Checklist",
                 "Audit Details",
                 "Reports",
@@ -1832,7 +2223,6 @@ with st.sidebar:
             [
                 "Dashboard",
                 "My Audits",
-                "My Timetable",
                 "Checklist",
                 "Audit Details",
                 "Reports",
@@ -1849,12 +2239,12 @@ render_breadcrumb(role, page)
 if role == "admin":
     if page == "Dashboard":
         page_admin_dashboard()
+    elif page == "Audit Calender":
+        page_audit_calendar()
+    elif page == "Audit Plan":
+        page_audit_plan()
     elif page == "Auditors & Skills":
         page_admin_auditors_skills()
-    elif page == "Create & Assign Audit":
-        page_admin_create_assign()
-    elif page == "Audit Plan":
-        page_admin_audit_plan()
     elif page == "Checklist":
         depts = _get_checklist_catalog_depts() or _engine_call("load_departments_catalog")
         if not depts:
@@ -1874,8 +2264,6 @@ else:
         st.metric("Assigned Audits", len(my_audits))
     elif page == "My Audits":
         page_auditor_my_audits()
-    elif page == "My Timetable":
-        page_auditor_my_timetable()
     elif page == "Checklist":
         my_depts = sorted(
             {

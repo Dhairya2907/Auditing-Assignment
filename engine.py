@@ -9,10 +9,44 @@ import hmac
 import sqlite3
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, date, timedelta
 from typing import Any, Dict, List, Set, Optional, Tuple
 
-import timetable  # keep your existing import
+# -----------------------------
+# Date helpers
+# -----------------------------
+
+def _parse_iso_date(val) -> Optional[date]:
+    """Parse a date coming from DB/UI safely.
+
+    Accepts:
+    - 'YYYY-MM-DD'
+    - ISO datetime strings like 'YYYY-MM-DDTHH:MM:SS'
+    - datetime/date objects
+    """
+    if val is None:
+        return None
+
+    # datetime -> date
+    if isinstance(val, datetime):
+        return val.date()
+
+    # date (but not datetime)
+    if isinstance(val, date):
+        return val
+
+    if isinstance(val, str):
+        s = val.strip()
+        if not s:
+            return None
+        try:
+            return date.fromisoformat(s[:10])
+        except Exception:
+            return None
+
+    return None
+
+
 
 
 # ============================================================
@@ -188,6 +222,21 @@ def _executescript(script: str) -> None:
         conn.executescript(script)
 
 
+
+
+def _table_columns(table: str) -> Set[str]:
+    """Return set of column names for a table (SQLite-safe)."""
+    rows = _fetch_all(f"PRAGMA table_info({table})", ())
+    return {str(r.get("name")) for r in rows if r.get("name")}
+
+
+def _ensure_column(table: str, col_name: str, col_def_sql: str) -> None:
+    cols = _table_columns(table)
+    if col_name in cols:
+        return
+    _execute(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_def_sql}")
+
+
 # ============================================================
 # Schema + seed
 # ============================================================
@@ -290,6 +339,8 @@ create table if not exists audits (
 );
 create index if not exists idx_audits_tenant on audits(tenant_id);
 
+
+
 create table if not exists audit_state (
   tenant_id text primary key,
   busy_by_name_json text not null,
@@ -329,16 +380,222 @@ create table if not exists generated_final_reports (
 create index if not exists idx_finalreports_tenant on generated_final_reports(tenant_id);
 create index if not exists idx_finalreports_createdat on generated_final_reports(created_at);
 """
+def _repair_audit_plan_schema() -> None:
+    """Repair legacy SQLite schemas that cause FK mismatch errors for audit plans.
+
+    The error:
+      sqlite3.OperationalError: foreign key mismatch - "audit_plan_slots" referencing "audit_plans"
+
+    In SQLite, this happens when the referenced column (audit_plans.plan_id) is NOT a PRIMARY KEY
+    and does NOT have a UNIQUE index/constraint, even if the column exists.
+
+    Strategy (safe + audit-defensible):
+      - Detect legacy/incorrect schemas using BOTH:
+          * required column presence
+          * required constraint presence (plan_id must be PRIMARY KEY or UNIQUE)
+      - If mismatch is detected, we:
+          1) Rename existing tables to *_bak_<timestamp>
+          2) Recreate fresh tables with the current schema (plan_id PRIMARY KEY)
+      - Backups are kept for manual recovery if needed.
+    """
+
+    expected_plans_cols = {
+        "plan_id",
+        "tenant_id",
+        "calendar_audit_id",
+        "working_days",
+        "created_by",
+        "plan_json",
+        "created_at",
+        "updated_at",
+    }
+    expected_slots_cols = {
+        "id",
+        "tenant_id",
+        "plan_id",
+        "plan_date",
+        "slot_start",
+        "slot_end",
+        "department",
+        "auditor_name",
+        "notes",
+    }
+
+    def _table_exists(name: str) -> bool:
+        r = _fetch_one("select name from sqlite_master where type='table' and name=? limit 1;", (name,))
+        return bool(r)
+
+    if not _table_exists("audit_plans") and not _table_exists("audit_plan_slots"):
+        return
+
+    plans_cols = _table_columns("audit_plans") if _table_exists("audit_plans") else set()
+    slots_cols = _table_columns("audit_plan_slots") if _table_exists("audit_plan_slots") else set()
+
+    needs_rebuild = False
+
+    # Column shape check
+    if plans_cols and not expected_plans_cols.issubset(plans_cols):
+        needs_rebuild = True
+    if slots_cols and not expected_slots_cols.issubset(slots_cols):
+        needs_rebuild = True
+
+    # Constraint check: audit_plans.plan_id MUST be PK or UNIQUE
+    if not needs_rebuild and plans_cols:
+        try:
+            info = _fetch_all("PRAGMA table_info(audit_plans);", ())
+            pk_cols = {str(r.get("name")) for r in info if int(r.get("pk") or 0) == 1}
+        except Exception:
+            pk_cols = set()
+
+        if "plan_id" not in pk_cols:
+            # Maybe it's UNIQUE instead of PK (acceptable). Check unique indexes.
+            try:
+                idxs = _fetch_all("PRAGMA index_list(audit_plans);", ())
+                unique_idx_names = [r["name"] for r in idxs if int(r.get("unique") or 0) == 1]
+                unique_cols = set()
+                for idx_name in unique_idx_names:
+                    cols = _fetch_all(f"PRAGMA index_info({idx_name});", ())
+                    unique_cols |= {str(c.get("name")) for c in cols if c.get("name")}
+            except Exception:
+                unique_cols = set()
+
+            if "plan_id" not in unique_cols:
+                needs_rebuild = True
+
+    if not needs_rebuild:
+        return
+
+    ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
+    plans_bak = f"audit_plans_bak_{ts}"
+    slots_bak = f"audit_plan_slots_bak_{ts}"
+
+    script = "PRAGMA foreign_keys=OFF;\nBEGIN;\n\n"
+    # backup legacy tables (keep data for manual recovery if needed)
+    if slots_cols:
+        script += f"ALTER TABLE audit_plan_slots RENAME TO {slots_bak};\n"
+    if plans_cols:
+        script += f"ALTER TABLE audit_plans RENAME TO {plans_bak};\n"
+
+    script += """\n
+    -- recreate tables with current schema
+    create table if not exists audit_plans (
+      plan_id text primary key,
+      tenant_id text not null,
+      calendar_audit_id text not null,
+      working_days integer not null,
+      created_by text not null,
+      plan_json text not null default ('{}'),
+      created_at text not null default (datetime('now')),
+      updated_at text,
+      unique (tenant_id, calendar_audit_id),
+      foreign key (tenant_id) references tenants(id) on delete cascade,
+      foreign key (calendar_audit_id) references audit_calendar(id) on delete cascade
+    );
+
+    create table if not exists audit_plan_slots (
+      id text primary key,
+      tenant_id text not null,
+      plan_id text not null,
+      plan_date text not null,
+      slot_start text not null,
+      slot_end text not null,
+      department text not null,
+      auditor_name text,
+      notes text,
+      unique (tenant_id, plan_id, plan_date, slot_start),
+      foreign key (tenant_id) references tenants(id) on delete cascade,
+      foreign key (plan_id) references audit_plans(plan_id) on delete cascade
+    );
+
+    create index if not exists idx_audit_plans_tenant on audit_plans(tenant_id);
+    create index if not exists idx_audit_plan_slots_tenant on audit_plan_slots(tenant_id);
+    create index if not exists idx_audit_plan_slots_plan on audit_plan_slots(plan_id);
+
+    COMMIT;
+    PRAGMA foreign_keys=ON;
+    """
+
+    _executescript(script)
 
 def init_db() -> None:
     _executescript(_SCHEMA)
 
+    migrate_db()
+
+
+def migrate_db() -> None:
+
+    """Lightweight, safe migrations for existing SQLite DBs."""
+    # Create new tables if missing (safe for existing installs)
+    _executescript(
+        """
+        create table if not exists audit_calendar (
+          id text primary key,
+          tenant_id text not null,
+          title text not null,
+          scope text not null,
+          start_date text not null,
+          end_date text not null,
+          created_by text not null,
+          created_at text not null default (datetime('now')),
+          foreign key (tenant_id) references tenants(id) on delete cascade
+        );
+        create index if not exists idx_audit_calendar_tenant on audit_calendar(tenant_id);
+
+        create table if not exists audit_plans (
+          plan_id text primary key,
+          tenant_id text not null,
+          calendar_audit_id text not null,
+          working_days integer not null,
+          created_by text not null,
+          plan_json text not null default ('{}'),
+          created_at text not null default (datetime('now')),
+          updated_at text,
+          unique (tenant_id, calendar_audit_id),
+          foreign key (tenant_id) references tenants(id) on delete cascade,
+          foreign key (calendar_audit_id) references audit_calendar(id) on delete cascade
+        );
+        create index if not exists idx_audit_plans_tenant on audit_plans(tenant_id);
+
+        create table if not exists audit_plan_slots (
+          id text primary key,
+          tenant_id text not null,
+          plan_id text not null,
+          plan_date text not null,
+          slot_start text not null,
+          slot_end text not null,
+          department text not null,
+          auditor_name text,
+          notes text,
+          unique (tenant_id, plan_id, plan_date, slot_start),
+          foreign key (tenant_id) references tenants(id) on delete cascade,
+          foreign key (plan_id) references audit_plans(plan_id) on delete cascade
+        );
+        create index if not exists idx_audit_plan_slots_plan on audit_plan_slots(plan_id);
+        """
+    )
+
+
+
+    # ---- Migration: repair audit plan schema (prevents FK mismatch errors) ----
+    try:
+        _repair_audit_plan_schema()
+    except Exception:
+        # Never block app startup due to a non-critical migration.
+        pass
+
+
+
 def _get_tenant_by_code(tenant_code: str) -> Optional[Dict[str, Any]]:
+    """Return tenant row dict by tenant_code, or None."""
     tenant_code = _normalize_text(tenant_code).lower()
+    if not tenant_code:
+        return None
     return _fetch_one(
-        "select id, tenant_code, name from tenants where tenant_code = ? limit 1;",
+        "select * from tenants where tenant_code=? limit 1;",
         (tenant_code,),
     )
+
 
 def ensure_tenant(tenant_code: str, tenant_name: str = "") -> str:
     """
@@ -1587,6 +1844,83 @@ def _save_updated_audit(updated: Dict[str, Any], tenant_id: Optional[str] = None
         ),
     )
 
+def save_updated_audit(updated: Dict[str, Any], tenant_id: Optional[str] = None) -> None:
+    """
+    Public wrapper around _save_updated_audit.
+    Use this from UI code if you prefer not to call underscore-prefixed functions.
+    """
+    _save_updated_audit(updated, tenant_id=tenant_id)
+
+
+
+def create_audit(
+    created_by: str,
+    target_dept: str,
+    title: str = "",
+    scope: str = "",
+    due_date: str = "",
+    audit_date: str = "",
+    required_skill_keys_override: Optional[Set[str]] = None,
+    save_required_skills_as_default: bool = False,
+    tenant_id: Optional[str] = None,
+) -> Tuple[Optional[Dict[str, Any]], str]:
+    """
+    Create an audit record ONLY (no auditor assignment, no locking).
+
+    Notes (current DB schema constraints):
+      - audits.assigned_auditor is NOT NULL, so we store "" (empty string) until assignment happens.
+      - audits.auditor_level is NOT NULL, so we store "" until assignment happens.
+      - audits table does not have an audit_date column; we accept audit_date for UI compatibility
+        and ignore it at persistence layer for now.
+
+    Returns: (audit_dict, message)
+    """
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+
+    target_dept = _normalize_text(target_dept)
+    if not target_dept:
+        return None, "Department is required."
+
+    add_department_to_catalog(target_dept, tenant_id=tenant_id)
+
+    # Determine required skills (same rules as create_and_assign_audit, but without assignment)
+    if required_skill_keys_override is not None:
+        required_skills = set(str(k).strip().lower() for k in required_skill_keys_override if str(k).strip())
+        for k in list(required_skills):
+            ensure_skill_key_exists(k, fallback_label=k, tenant_id=tenant_id)
+        if save_required_skills_as_default:
+            set_dept_required_skills(target_dept, sorted(required_skills), tenant_id=tenant_id)
+    else:
+        required_skills = get_required_skills_for_dept(target_dept, tenant_id=tenant_id)
+
+    if not required_skills and target_dept.lower() != "mr":
+        return None, "No required skills defined for this department. Enter required skills (or save them as default)."
+
+    audit_id = _new_audit_id()
+    audit = {
+        "audit_id": audit_id,
+        "title": (title or "").strip(),
+        "scope": (scope or "").strip(),
+        "audited_department": target_dept,
+        "required_skills": sorted(required_skills),
+        # IMPORTANT: no assignment at create stage
+        "assigned_auditor": "",
+        "auditor_level": "",
+        "status": "Created",
+        "created_by": _normalize_text(created_by) or "admin",
+        "created_at": _now_iso(),
+        "due_date": (due_date or "").strip(),
+        "reports": [],
+        "report_submitted_at": "",
+        "closed_at": "",
+        "checklists": {},
+        "checklist_extras": {},
+    }
+
+    _save_updated_audit(audit, tenant_id=tenant_id)
+    return audit, f"Audit created: {audit_id}"
+
+
 def create_and_assign_audit(
     created_by: str,
     target_dept: str,
@@ -2413,9 +2747,337 @@ def get_audit_dropdown_options(tenant_id: Optional[str] = None) -> Tuple[List[st
             key = f"{base} [{seen[base]}]"
         else:
             seen[key] = 1
-
+ 
         labels.append(key)
         label_to_id[key] = audit_id
 
     labels.sort(key=lambda x: x.lower())
     return labels, label_to_id
+
+
+
+
+
+
+
+
+
+
+# ============================================================
+# Audit Calendar + Audit Plan (working-days scheduling)
+# ============================================================
+
+AUDIT_PLAN_SLOTS = [
+    ("09:30", "10:30"),
+    ("10:30", "11:30"),
+    ("11:30", "12:30"),
+    ("12:30", "13:30"),
+    ("13:30", "14:30"),
+    ("14:30", "15:30"),
+    ("15:30", "16:30"),
+]
+
+def list_audit_calendar(tenant_id: str) -> List[Dict[str, Any]]:
+    init_db()
+    rows = _fetch_all(
+        """
+        select id, title, scope, start_date, end_date, created_by, created_at
+        from audit_calendar
+        where tenant_id = ?
+        order by start_date asc;
+        """,
+        (tenant_id,),
+    )
+    return [dict(r) for r in rows]
+
+def create_audit_calendar(
+    tenant_id: str,
+    title: str,
+    scope: str,
+    start_date: str,
+    end_date: str,
+    created_by: str,
+) -> Tuple[Optional[Dict[str, Any]], str]:
+    init_db()
+    title = _normalize_text(title)
+    scope = _normalize_text(scope)
+    if not title:
+        return None, "Audit title is required."
+    if not scope:
+        return None, "Scope is required."
+    if not start_date or not end_date:
+        return None, "Start Date and End Date are required."
+    try:
+        sd = datetime.fromisoformat(start_date).date()
+        ed = datetime.fromisoformat(end_date).date()
+    except Exception:
+        return None, "Invalid date format."
+    if ed < sd:
+        return None, "End Date cannot be before Start Date."
+
+    audit_id = str(uuid.uuid4())
+    _execute(
+        """
+        insert into audit_calendar (id, tenant_id, title, scope, start_date, end_date, created_by)
+        values (?, ?, ?, ?, ?, ?, ?);
+        """,
+        (audit_id, tenant_id, title, scope, sd.isoformat(), ed.isoformat(), created_by or ""),
+    )
+    row = _fetch_one(
+        """
+        select id, title, scope, start_date, end_date, created_by, created_at
+        from audit_calendar where tenant_id=? and id=?;
+        """,
+        (tenant_id, audit_id),
+    )
+    return (dict(row) if row else None), "Audit created."
+
+def get_audit_calendar(tenant_id: str, audit_id: str) -> Optional[Dict[str, Any]]:
+    init_db()
+    row = _fetch_one(
+        """
+        select id, title, scope, start_date, end_date, created_by, created_at
+        from audit_calendar where tenant_id=? and id=? limit 1;
+        """,
+        (tenant_id, audit_id),
+    )
+    return dict(row) if row else None
+
+def _is_working_day(d: date) -> bool:
+    # Mon=0 .. Sun=6
+    return d.weekday() < 5
+
+def _next_working_days(start: date, count: int) -> List[date]:
+    """Return the next `count` working days starting from `start` (inclusive)."""
+    days: List[date] = []
+    cur = start
+    while len(days) < int(count):
+        if _is_working_day(cur):
+            days.append(cur)
+        cur = cur + timedelta(days=1)
+    return days
+
+def list_departments_simple(tenant_id: str) -> List[str]:
+    init_db()
+    rows = _fetch_all(
+        "select name from departments where tenant_id=? order by name asc;",
+        (tenant_id,),
+    )
+    return [r["name"] for r in rows]
+
+def list_eligible_auditors(tenant_id: str, audited_department: str) -> List[str]:
+    """Eligible auditors from people table; excludes same department."""
+    init_db()
+    audited_department_n = _normalize_text(audited_department).lower()
+    rows = _fetch_all(
+        """
+        select name, department from people
+        where tenant_id=? and is_active=1
+        order by name asc;
+        """,
+        (tenant_id,),
+    )
+    names = []
+    for r in rows:
+        dep = _normalize_text(r["department"]).lower()
+        if audited_department_n and dep == audited_department_n:
+            continue
+        names.append(r["name"])
+    return names
+
+def get_audit_plan_by_calendar_audit(tenant_id: str, calendar_audit_id: str) -> Optional[Dict[str, Any]]:
+    init_db()
+    row = _fetch_one(
+        """
+        select plan_id, calendar_audit_id, working_days, created_by, created_at, updated_at
+        from audit_plans where tenant_id=? and calendar_audit_id=? limit 1;
+        """,
+        (tenant_id, calendar_audit_id),
+    )
+    if not row:
+        return None
+    plan = dict(row)
+    slots = _fetch_all(
+        """
+        select id, plan_date, slot_start, slot_end, department, auditor_name, notes
+        from audit_plan_slots
+        where tenant_id=? and plan_id=?
+        order by plan_date asc, slot_start asc;
+        """,
+        (tenant_id, plan["plan_id"]),
+    )
+    plan["slots"] = [dict(s) for s in slots]
+    return plan
+
+def create_or_reset_audit_plan(
+    tenant_id: str,
+    calendar_audit_id: str,
+    working_days: int,
+    created_by: str,
+) -> Tuple[Optional[Dict[str, Any]], str]:
+    init_db()
+    if working_days is None or int(working_days) <= 0:
+        return None, "Working days must be greater than 0."
+
+    audit = get_audit_calendar(tenant_id, calendar_audit_id)
+    if not audit:
+        return None, "Selected audit not found."
+
+    sd = _parse_iso_date(audit.get("start_date"))
+    if not sd:
+        return None, "Audit Start Date is invalid."
+
+    working_days = int(working_days)
+
+    # Upsert plan header
+    existing = _fetch_one(
+        "select plan_id from audit_plans where tenant_id=? and calendar_audit_id=? limit 1;",
+        (tenant_id, calendar_audit_id),
+    )
+    if existing:
+        plan_id = existing["plan_id"]
+        _execute(
+            "update audit_plans set working_days=?, updated_at=datetime('now') where tenant_id=? and plan_id=?;",
+            (working_days, tenant_id, plan_id),
+        )
+                # Backfill plan_json for older schemas (NOT NULL)
+        if "plan_json" in _table_columns("audit_plans"):
+            try:
+                _execute("update audit_plans set plan_json='{}' where tenant_id=? and plan_id=? and (plan_json is null or plan_json='');", (tenant_id, plan_id))
+            except Exception:
+                pass
+
+# Reset slots
+        _execute("delete from audit_plan_slots where tenant_id=? and plan_id=?;", (tenant_id, plan_id))
+    else:
+        plan_id = str(uuid.uuid4())
+        # Some older DBs have a NOT NULL plan_json column; include it when required.
+        cols = _table_columns("audit_plans")
+        plan_json = "{}"
+        if "plan_json" in cols:
+            _execute(
+                """
+                insert into audit_plans (plan_id, tenant_id, calendar_audit_id, working_days, created_by, plan_json)
+                values (?, ?, ?, ?, ?, ?);
+                """,
+                (plan_id, tenant_id, calendar_audit_id, working_days, created_by or "", plan_json),
+            )
+        else:
+            _execute(
+                """
+                insert into audit_plans (plan_id, tenant_id, calendar_audit_id, working_days, created_by)
+                values (?, ?, ?, ?, ?);
+                """,
+                (plan_id, tenant_id, calendar_audit_id, working_days, created_by or ""),
+            )
+
+    # Generate working days list
+    days = _next_working_days(sd, working_days)
+
+    # Default department is empty placeholder
+    for d in days:
+        for s0, s1 in AUDIT_PLAN_SLOTS:
+            _execute(
+                """
+                insert into audit_plan_slots
+                (id, tenant_id, plan_id, plan_date, slot_start, slot_end, department, auditor_name, notes)
+                values (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                """,
+                (
+                    str(uuid.uuid4()),
+                    tenant_id,
+                    plan_id,
+                    d.isoformat(),
+                    s0,
+                    s1,
+                    "",
+                    None,
+                    None,
+                ),
+            )
+
+    return get_audit_plan_by_calendar_audit(tenant_id, calendar_audit_id), "Audit plan created."
+
+def update_audit_plan_slots(
+    tenant_id: str,
+    plan_id: str,
+    slots: List[Dict[str, Any]],
+) -> Tuple[bool, str]:
+    init_db()
+    # Validate plan exists
+    row = _fetch_one(
+        "select plan_id from audit_plans where tenant_id=? and plan_id=? limit 1;",
+        (tenant_id, plan_id),
+    )
+    if not row:
+        return False, "Audit plan not found."
+
+    # Update each slot by unique key (plan_date + slot_start)
+    for s in slots:
+        plan_date = s.get("plan_date") or s.get("Date") or ""
+        slot_start = s.get("slot_start") or s.get("Slot Start") or ""
+        slot_end = s.get("slot_end") or s.get("Slot End") or ""
+        department = _normalize_text(s.get("department") or s.get("Department") or "")
+        auditor_name = _normalize_text(s.get("auditor_name") or s.get("Auditor") or "")
+        notes = s.get("notes") or s.get("Notes") or None
+
+        if not plan_date or not slot_start or not slot_end:
+            continue  # skip invalid row
+
+        _execute(
+            """
+            update audit_plan_slots
+            set department=?, auditor_name=?, notes=?
+            where tenant_id=? and plan_id=? and plan_date=? and slot_start=? and slot_end=?;
+            """,
+            (department, auditor_name if auditor_name else None, notes, tenant_id, plan_id, plan_date, slot_start, slot_end),
+        )
+
+    _execute("update audit_plans set updated_at=datetime('now') where tenant_id=? and plan_id=?;", (tenant_id, plan_id))
+    return True, "Audit plan saved."
+
+def auto_assign_auditors(
+    tenant_id: str,
+    plan_id: str,
+) -> Tuple[bool, str]:
+    """Fill missing auditor_name for slots where department is set."""
+    init_db()
+    slots = _fetch_all(
+        """
+        select id, plan_date, slot_start, slot_end, department, auditor_name
+        from audit_plan_slots
+        where tenant_id=? and plan_id=?
+        order by plan_date asc, slot_start asc;
+        """,
+        (tenant_id, plan_id),
+    )
+    assigned_by_date: Dict[str, Set[str]] = {}
+    changed = 0
+    for s in slots:
+        dep = _normalize_text(s["department"])
+        if not dep:
+            continue
+        if s["auditor_name"]:
+            continue
+        key = s["plan_date"]
+        assigned = assigned_by_date.setdefault(key, set())
+
+        eligible = list_eligible_auditors(tenant_id, dep)
+        pick = None
+        for name in eligible:
+            if name not in assigned:
+                pick = name
+                break
+        if not pick and eligible:
+            pick = eligible[0]
+        if pick:
+            _execute(
+                "update audit_plan_slots set auditor_name=? where tenant_id=? and id=?;",
+                (pick, tenant_id, s["id"]),
+            )
+            assigned.add(pick)
+            changed += 1
+
+    if changed:
+        _execute("update audit_plans set updated_at=datetime('now') where tenant_id=? and plan_id=?;", (tenant_id, plan_id))
+    return True, f"Auto-assigned {changed} slot(s)."
