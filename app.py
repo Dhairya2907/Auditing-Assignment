@@ -1,6 +1,12 @@
 import streamlit as st
 
 # -----------------------------
+# UI Theme (light/dark)
+# -----------------------------
+if "ui_theme" not in st.session_state:
+    st.session_state["ui_theme"] = "light"
+
+# -----------------------------
 # Session State Defaults
 # -----------------------------
 def _ensure_auth_state():
@@ -322,20 +328,88 @@ h3 { margin-top: 0.7rem; margin-bottom: 0.3rem; }
     )
 
 
-def render_topbar(username: str, role: str):
-    # Uses the .hero + .pill styles from injected CSS
+def inject_theme_overrides():
+    """
+    Lightweight light/dark overrides on top of enterprise CSS.
+    Keeps layout intact; only adjusts colors and surfaces.
+    """
+    theme = (st.session_state.get("ui_theme") or "light").lower().strip()
+    if theme != "dark":
+        return
+
     st.markdown(
-        f"""
-        <div class="hero">
-            <div class="left">
-                <div class="title">Audit Assignment System</div>
-                <div class="sub">Controlled scheduling, skill matching, checklists, reports, and closure control</div>
-            </div>
-            <div class="pill"><span class="dot"></span>{role.upper()} • {username}</div>
-        </div>
+        """
+<style>
+/* ============ Dark mode overrides ============ */
+.stApp { background: #0b1220 !important; color: #e5e7eb !important; }
+.block-container { background: transparent !important; }
+
+section[data-testid="stSidebar"] {
+    background: #0f172a !important;
+    border-right: 1px solid #223047 !important;
+}
+section[data-testid="stSidebar"] * { color: #e5e7eb !important; }
+
+/* Headings and text */
+h1,h2,h3,h4,h5,h6 { color: #f1f5f9 !important; }
+p, span, li { color: #cbd5e1 !important; }
+
+/* Panels/cards */
+.panel, .card, .hero, .kpi, .pill, .breadcrumb {
+    background: #0f172a !important;
+    border: 1px solid #223047 !important;
+}
+.panel-title, .title { color: #f1f5f9 !important; }
+.panel-subtitle, .sub, .subtle { color: #94a3b8 !important; }
+
+/* Inputs */
+.stTextInput input, .stTextArea textarea, .stSelectbox div[data-baseweb="select"] > div,
+.stMultiSelect div[data-baseweb="select"] > div, .stDateInput input {
+    background: #0b1220 !important;
+    color: #e5e7eb !important;
+    border: 1px solid #223047 !important;
+}
+
+/* Buttons */
+.stButton button, button[kind="primary"] {
+    background: #111c33 !important;
+    color: #e5e7eb !important;
+    border: 1px solid #223047 !important;
+}
+.stButton button:hover { border-color: #3b82f6 !important; }
+
+/* Tables/Data editor */
+[data-testid="stDataFrame"], .stDataFrame, .stTable {
+    background: #0f172a !important;
+    border: 1px solid #223047 !important;
+}
+</style>
         """,
         unsafe_allow_html=True,
     )
+
+def render_topbar(username: str, role: str):
+    # Theme toggle is placed on the right; header layout stays enterprise.
+    left, right = st.columns([10, 1], vertical_alignment="center")
+    with left:
+        st.markdown(
+            f"""
+            <div class="hero">
+                <div class="left">
+                    <div class="title">Audit Assignment System</div>
+                    <div class="sub">Controlled scheduling, skill matching, checklists, reports, and closure control</div>
+                </div>
+                <div class="pill"><span class="dot"></span>{role.upper()} • {username}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with right:
+        theme = (st.session_state.get("ui_theme") or "light").lower().strip()
+        icon = "🌙" if theme == "light" else "☀️"
+        if st.button(icon, key="btn_toggle_theme", help="Toggle light/dark mode"):
+            st.session_state["ui_theme"] = "dark" if theme == "light" else "light"
+            st.rerun()
 
 def render_breadcrumb(role: str, page_name: str):
     role_label = "Admin" if (role or "").strip().lower() == "admin" else "Auditor"
@@ -429,6 +503,7 @@ st.set_page_config(
 )
 
 inject_enterprise_css()
+inject_theme_overrides()
 
 # ✅ MULTI-TENANT: seed default tenant safely (no UI changes)
 try:
@@ -1235,64 +1310,145 @@ def page_audit_plan():
         st.warning("No plan slots found; reset the plan once.")
         return
 
-    df = _pd.DataFrame(
-        [
-            {
-                "Date": s.get("plan_date"),
-                "Slot Start": s.get("slot_start"),
-                "Slot End": s.get("slot_end"),
-                "Department": s.get("department") or "",
-                "Auditor": s.get("auditor_name") or "",
-                "Notes": s.get("notes") or "",
-            }
-            for s in slots
-        ]
-    )
-
+    # Build a working copy of slots for editing (slot-wise UI)
     dept_list = _engine_call("list_departments_simple", tenant_id) or []
-    dept_options = [""] + dept_list
+    dept_options = [""] + [d for d in dept_list if d]
 
-    people = _engine_call("load_people") or []
-    try:
-        all_auditors = sorted([p.name for p in people if getattr(p, "is_active", True)])
-    except Exception:
-        all_auditors = []
-    auditor_options = [""] + all_auditors
+    people = _engine_call("load_people", tenant_id=tenant_id) or []
+    state = _engine_call("load_state", tenant_id=tenant_id) or {}
+    schedule = timetable.load_schedule() if _HAS_TIMETABLE and timetable is not None else {"days": {}}
+
+    def _norm(s: str) -> str:
+        return " ".join(str(s or "").strip().split()).lower()
+
+    def eligible_auditors_for(department: str, date_str: str, slot_str: str) -> List[str]:
+        dep = (department or "").strip()
+        if not dep:
+            return []
+        required = _engine_call("get_required_skills_for_dept", dep, tenant_id=tenant_id) if dep else set()
+        required = set(required or set())
+
+        eligible: List[str] = []
+        for p in people:
+            p_name = getattr(p, "name", "")
+            p_dept = getattr(p, "department", "")
+            p_skills = set(getattr(p, "skills", set()) or set())
+
+            # Rule 1: must not audit own department
+            if _norm(p_dept) and _norm(p_dept) == _norm(dep):
+                continue
+
+            # Rule 2: must have all required skills (if configured)
+            if required and not required.issubset(p_skills):
+                continue
+
+            # Rule 3: must not be globally busy
+            if engine.is_busy(state, p_name):
+                continue
+
+            # Rule 4: must not clash in timetable for this date+slot
+            if _HAS_TIMETABLE and timetable is not None:
+                if timetable.auditor_is_busy(schedule, date_str, slot_str, p_name):
+                    continue
+
+            eligible.append(p_name)
+
+        return sorted(set([x for x in eligible if x]))
 
     st.subheader("Plan schedule")
-    edited = st.data_editor(
-        df,
-        use_container_width=True,
-        hide_index=True,
-        column_config={
-            "Department": st.column_config.SelectboxColumn("Department", options=dept_options),
-            "Auditor": st.column_config.SelectboxColumn("Auditor", options=auditor_options),
-            "Notes": st.column_config.TextColumn("Notes"),
-        },
-        disabled=["Date", "Slot Start", "Slot End"],
-        key=f"plan_editor_{plan.get('plan_id')}",
-    )
+    st.caption("Auditor dropdown follows rules: not same department, required skills match, not busy, no slot clash.")
+
+    # Keep edited values in session_state so changes persist across reruns
+    ss_key = f"plan_edits_{plan.get('plan_id')}"
+    if ss_key not in st.session_state:
+        st.session_state[ss_key] = {
+            s.get("id"): {
+                "department": s.get("department") or "",
+                "auditor_name": s.get("auditor_name") or "",
+                "notes": s.get("notes") or "",
+            }
+            for s in slots
+        }
+
+    edits = st.session_state[ss_key]
+
+    # Render slot-wise editor
+    for d in sorted(set([s.get("plan_date") for s in slots if s.get("plan_date")])):
+        st.markdown(f"### {d}")
+        day_slots = [s for s in slots if s.get("plan_date") == d]
+        for s in day_slots:
+            sid = s.get("id")
+            slot_start = s.get("slot_start")
+            slot_end = s.get("slot_end")
+            slot_str = f"{slot_start}-{slot_end}"
+
+            row = edits.get(sid, {"department": "", "auditor_name": "", "notes": ""})
+
+            c1, c2, c3, c4 = st.columns([2.2, 2.2, 2.2, 3.4])
+            with c1:
+                st.text_input("Slot", value=slot_str, key=f"slot_lbl_{sid}", disabled=True)
+
+            with c2:
+                dept_val = st.selectbox(
+                    "Department",
+                    options=dept_options,
+                    index=dept_options.index(row.get("department", "")) if row.get("department", "") in dept_options else 0,
+                    key=f"slot_dept_{sid}",
+                )
+
+            # compute eligible list after dept selection
+            elig = eligible_auditors_for(dept_val, d, slot_str)
+            auditor_options = [""] + elig
+
+            with c3:
+                aud_val = st.selectbox(
+                    "Auditor",
+                    options=auditor_options,
+                    index=auditor_options.index(row.get("auditor_name", "")) if row.get("auditor_name", "") in auditor_options else 0,
+                    key=f"slot_aud_{sid}",
+                )
+
+            with c4:
+                notes_val = st.text_input("Notes", value=row.get("notes", ""), key=f"slot_notes_{sid}")
+
+            # persist edits
+            edits[sid] = {"department": dept_val or "", "auditor_name": aud_val or "", "notes": notes_val or ""}
+
+        st.divider()
 
     c1, c2 = st.columns(2)
     if c1.button("Auto-assign missing auditors"):
         ok, msg = _engine_call("auto_assign_auditors", tenant_id, plan["plan_id"])
         if ok:
             st.success(msg)
+            # refresh edits from DB
+            plan = _engine_call("get_audit_plan_by_calendar_audit", calendar_audit_id=calendar_audit_id)
+            slots = plan.get("slots", []) or []
+            st.session_state[ss_key] = {
+                s.get("id"): {
+                    "department": s.get("department") or "",
+                    "auditor_name": s.get("auditor_name") or "",
+                    "notes": s.get("notes") or "",
+                }
+                for s in slots
+            }
             _rerun()
         else:
             st.error(msg)
 
     if c2.button("Save Audit Plan"):
         payload = []
-        for _, row in edited.iterrows():
+        for s in slots:
+            sid = s.get("id")
+            row = edits.get(sid, {})
             payload.append(
                 {
-                    "plan_date": row["Date"],
-                    "slot_start": row["Slot Start"],
-                    "slot_end": row["Slot End"],
-                    "department": row.get("Department", "") or "",
-                    "auditor_name": row.get("Auditor", "") or "",
-                    "notes": row.get("Notes", "") or "",
+                    "plan_date": s.get("plan_date"),
+                    "slot_start": s.get("slot_start"),
+                    "slot_end": s.get("slot_end"),
+                    "department": row.get("department", "") or "",
+                    "auditor_name": row.get("auditor_name", "") or "",
+                    "notes": row.get("notes", "") or "",
                 }
             )
         ok, msg = _engine_call("update_audit_plan_slots", tenant_id, plan["plan_id"], payload)
@@ -1300,6 +1456,7 @@ def page_audit_plan():
             st.success(msg)
         else:
             st.error(msg)
+
 
 
 # ============================================================
@@ -2147,7 +2304,6 @@ def page_auditor_my_audits():
     st.info("Rule: Upload at least one report, submit it, then you can complete the audit.")
 
 
-
 def page_auditor_my_timetable():
     import pandas as pd
 
@@ -2194,6 +2350,7 @@ def page_auditor_my_timetable():
             st.table(tdf[["Time Slot", "Department to Audit"]])
 
 
+
 # ============================================================
 # Navigation (Sidebar Radio – Enterprise style)
 # ============================================================
@@ -2229,7 +2386,7 @@ with st.sidebar:
             ],
             label_visibility="collapsed",
         )
-
+        
 # ============================================================
 # Page Routing
 # ============================================================
@@ -2270,6 +2427,7 @@ else:
                 (a.get("audited_department") or "").strip()
                 for a in my_audits
                 if (a.get("audited_department") or "").strip()
+            
             },
             key=lambda x: x.lower(),
         )
@@ -2283,4 +2441,3 @@ else:
         page_audit_details()
     elif page == "Reports":
         page_reports()
-  

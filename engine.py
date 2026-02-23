@@ -2866,24 +2866,30 @@ def list_departments_simple(tenant_id: str) -> List[str]:
     return [r["name"] for r in rows]
 
 def list_eligible_auditors(tenant_id: str, audited_department: str) -> List[str]:
-    """Eligible auditors from people table; excludes same department."""
+    """Return eligible auditors for a given audited department.
+
+    Rules enforced:
+    - Auditor must NOT belong to the same department being audited.
+    - Auditor must have ALL required skills configured for that department (if any).
+    (Busy/slot conflicts are handled at UI layer where date+slot are known.)
+    """
     init_db()
     audited_department_n = _normalize_text(audited_department).lower()
-    rows = _fetch_all(
-        """
-        select name, department from people
-        where tenant_id=? and is_active=1
-        order by name asc;
-        """,
-        (tenant_id,),
-    )
-    names = []
-    for r in rows:
-        dep = _normalize_text(r["department"]).lower()
+
+    required = set(get_required_skills_for_dept(audited_department, tenant_id=tenant_id) or set())
+
+    people = load_people(tenant_id=tenant_id)
+    names: List[str] = []
+    for p in people:
+        dep = _normalize_text(getattr(p, "department", "")).lower()
         if audited_department_n and dep == audited_department_n:
             continue
-        names.append(r["name"])
-    return names
+        pskills = set(getattr(p, "skills", set()) or set())
+        if required and not required.issubset(pskills):
+            continue
+        names.append(getattr(p, "name", ""))
+    return sorted([n for n in names if n])
+
 
 def get_audit_plan_by_calendar_audit(tenant_id: str, calendar_audit_id: str) -> Optional[Dict[str, Any]]:
     init_db()
@@ -3081,3 +3087,4 @@ def auto_assign_auditors(
     if changed:
         _execute("update audit_plans set updated_at=datetime('now') where tenant_id=? and plan_id=?;", (tenant_id, plan_id))
     return True, f"Auto-assigned {changed} slot(s)."
+
