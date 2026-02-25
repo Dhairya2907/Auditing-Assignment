@@ -586,6 +586,14 @@ def migrate_db() -> None:
 
 
 
+
+
+    # ---- Migration: audit_plan_slots.audit_id (link plan slots -> created audits) ----
+    try:
+        _ensure_column("audit_plan_slots", "audit_id", "text")
+    except Exception:
+        pass
+
 def _get_tenant_by_code(tenant_code: str) -> Optional[Dict[str, Any]]:
     """Return tenant row dict by tenant_code, or None."""
     tenant_code = _normalize_text(tenant_code).lower()
@@ -888,6 +896,7 @@ def get_tenant_code_from_id(tenant_id: str) -> str:
 # Catalog: departments (tenant-aware)
 # ============================================================
 def load_departments_catalog(tenant_id: Optional[str] = None) -> List[str]:
+    init_db()
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
     rows = _fetch_all(
         "select name from departments where tenant_id = ? order by lower(name);",
@@ -896,6 +905,7 @@ def load_departments_catalog(tenant_id: Optional[str] = None) -> List[str]:
     return [str(r["name"]) for r in rows]
 
 def add_department_to_catalog(dept: str, tenant_id: Optional[str] = None) -> None:
+    init_db()
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
     dept = _normalize_text(dept)
     if not dept:
@@ -2495,6 +2505,146 @@ def load_audit_section_table(
         return None
     return a.get("checklists", {}).get(dept, {}).get(section)
 
+
+# -----------------------------
+# Sequential checklist helpers
+# -----------------------------
+def _checklist_row_complete(row: Dict[str, Any]) -> bool:
+    """A checklist row is considered complete when both observation and evidence are non-empty."""
+    obs = str(row.get("observation", "") or "").strip()
+    ev = str(row.get("evidence", "") or "").strip()
+    return bool(obs) and bool(ev)
+
+def get_checklist_rows_for_audit_section(
+    audit_id: str,
+    dept: str,
+    section: str,
+    *,
+    tenant_id: Optional[str] = None
+) -> List[Dict[str, str]]:
+    """Return the full checklist row list for an audit+dept+section.
+
+    If the audit has no saved checklist rows yet, it will be initialized from the checklist catalog.
+    """
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    dept = _normalize_text(dept)
+    section = _normalize_text(section)
+
+    saved = load_audit_section_table(audit_id, dept, section, tenant_id=tenant_id)
+    if saved and isinstance(saved, list):
+        # normalize keys
+        out = []
+        for r in saved:
+            out.append({
+                "sr_no": str(r.get("sr_no", "")).strip(),
+                "checklist": str(r.get("checklist", "")).strip(),
+                "observation": str(r.get("observation", "")).strip(),
+                "evidence": str(r.get("evidence", "")).strip(),
+            })
+        return out
+
+    # Initialize from department catalog section items
+    items = get_items_for_department_section(dept, section, tenant_id=tenant_id) or []
+    rows: List[Dict[str, str]] = []
+    for i, item in enumerate(items, start=1):
+        rows.append({
+            "sr_no": str(i),
+            "checklist": str(item).strip(),
+            "observation": "",
+            "evidence": "",
+        })
+    return rows
+
+def get_checklist_progress(
+    audit_id: str,
+    dept: str,
+    section: str,
+    *,
+    tenant_id: Optional[str] = None
+) -> Dict[str, int]:
+    """Compute sequential progress for the given audit section.
+
+    Returns:
+      - total: total rows
+      - unlocked: how many rows are unlocked (prefix-complete count + 1, capped to total)
+      - completed_prefix: how many rows are complete from the top without gaps
+      - completed_any: how many rows are complete (anywhere)
+    """
+    rows = get_checklist_rows_for_audit_section(audit_id, dept, section, tenant_id=tenant_id)
+    total = len(rows)
+    completed_any = sum(1 for r in rows if _checklist_row_complete(r))
+
+    completed_prefix = 0
+    for r in rows:
+        if _checklist_row_complete(r):
+            completed_prefix += 1
+        else:
+            break
+
+    unlocked = min(total, completed_prefix + 1) if total > 0 else 0
+    return {
+        "total": total,
+        "unlocked": unlocked,
+        "completed_prefix": completed_prefix,
+        "completed_any": completed_any,
+    }
+
+def save_single_checklist_response(
+    audit_id: str,
+    dept: str,
+    section: str,
+    sr_no: str,
+    observation: str,
+    evidence: str,
+    *,
+    auditor_name: Optional[str] = None,
+    tenant_id: Optional[str] = None
+) -> Tuple[bool, str]:
+    """Save a single checklist row's observation/evidence for an audit section.
+
+    This function preserves other rows and enforces the same permission checks
+    as save_audit_section_table when auditor_name is provided.
+    """
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    dept = _normalize_text(dept)
+    section = _normalize_text(section)
+    sr_no_s = str(sr_no or "").strip()
+    if not sr_no_s:
+        return False, "sr_no is required."
+
+    rows = get_checklist_rows_for_audit_section(audit_id, dept, section, tenant_id=tenant_id)
+
+    # Find row by sr_no; fallback to positional if needed
+    idx = None
+    for i, r in enumerate(rows):
+        if str(r.get("sr_no", "")).strip() == sr_no_s:
+            idx = i
+            break
+    if idx is None:
+        # if numeric, allow append up to that number
+        try:
+            n = int(sr_no_s)
+            if n <= 0:
+                raise ValueError
+            while len(rows) < n:
+                rows.append({"sr_no": str(len(rows) + 1), "checklist": "", "observation": "", "evidence": ""})
+            idx = n - 1
+        except Exception:
+            return False, "Checklist row not found."
+
+    rows[idx]["observation"] = str(observation or "").strip()
+    rows[idx]["evidence"] = str(evidence or "").strip()
+
+    # Save using existing permission logic
+    return save_audit_section_table(
+        audit_id=audit_id,
+        dept=dept,
+        section=section,
+        rows=rows,
+        auditor_name=auditor_name,
+        tenant_id=tenant_id,
+    )
+
 def add_audit_section_checklist_item(
     audit_id: str,
     dept: str,
@@ -2891,6 +3041,123 @@ def list_eligible_auditors(tenant_id: str, audited_department: str) -> List[str]
     return sorted([n for n in names if n])
 
 
+
+
+def _plan_slot_audit_title(calendar_audit: Optional[Dict[str, Any]], department: str, plan_date: str, slot_start: str, slot_end: str) -> str:
+    base = _normalize_text((calendar_audit or {}).get("title", ""))
+    dept = _normalize_text(department)
+    d = _normalize_text(plan_date)
+    s = f"{slot_start}-{slot_end}" if slot_start and slot_end else ""
+    if base and dept:
+        return f"{base} | {dept} | {d} {s}".strip()
+    if dept:
+        return f"{dept} | {d} {s}".strip()
+    return f"Audit | {d} {s}".strip()
+
+
+def _sync_plan_slots_to_audits(tenant_id: str, plan_id: str) -> Tuple[int, int]:
+    """Create/update audits based on filled audit_plan_slots.
+
+    Behaviour:
+      - For every slot with a Department and Auditor, ensure an audit exists.
+      - Store the created/linked audit_id back into audit_plan_slots.audit_id.
+      - If audit already exists, update assignment fields only when audit status is Created/Assigned.
+
+    Returns: (created_count, updated_count)
+    """
+    init_db()
+
+    # Fetch calendar audit details for nicer titles/scopes
+    plan = _fetch_one(
+        "select calendar_audit_id from audit_plans where tenant_id=? and plan_id=? limit 1;",
+        (tenant_id, plan_id),
+    )
+    cal = get_audit_calendar(tenant_id, str(plan.get("calendar_audit_id")) if plan else "") if plan else None
+    cal_scope = _normalize_text((cal or {}).get("scope", ""))
+
+    slots = _fetch_all(
+        """
+        select id, plan_date, slot_start, slot_end, department, auditor_name, notes, audit_id
+        from audit_plan_slots
+        where tenant_id=? and plan_id=?
+        order by plan_date asc, slot_start asc;
+        """,
+        (tenant_id, plan_id),
+    )
+
+    created = 0
+    updated = 0
+
+    for s in slots:
+        dept = _normalize_text(s.get("department") or "")
+        auditor_name = _normalize_text(s.get("auditor_name") or "")
+        if not dept or not auditor_name:
+            continue
+
+        # Required skills for the department (stored for visibility in audit record)
+        required = sorted(get_required_skills_for_dept(dept, tenant_id=tenant_id) or set())
+
+        slot_audit_id = str(s.get("audit_id") or "").strip()
+        existing_audit = get_audit(slot_audit_id, tenant_id=tenant_id) if slot_audit_id else None
+
+        title = _plan_slot_audit_title(cal, dept, str(s.get("plan_date") or ""), str(s.get("slot_start") or ""), str(s.get("slot_end") or ""))
+        notes = _normalize_text(s.get("notes") or "")
+
+        if existing_audit is None:
+            # Create a new audit linked to this slot
+            new_id = _new_audit_id()
+            audit = {
+                "audit_id": new_id,
+                "title": title,
+                "scope": cal_scope,
+                "audited_department": dept,
+                "required_skills": required,
+                "assigned_auditor": auditor_name,
+                "auditor_level": "",  # optional; not needed for visibility
+                "status": "Assigned",
+                "created_by": "admin",
+                "created_at": _now_iso(),
+                "due_date": str(s.get("plan_date") or ""),
+                "reports": [],
+                "report_submitted_at": "",
+                "closed_at": "",
+                "checklists": {},
+                "checklist_extras": {},
+                "plan_slot_notes": notes,
+            }
+            _save_updated_audit(audit, tenant_id=tenant_id)
+
+            # Link back to slot
+            try:
+                _execute(
+                    "update audit_plan_slots set audit_id=? where tenant_id=? and id=?;",
+                    (new_id, tenant_id, s["id"]),
+                )
+            except Exception:
+                pass
+
+            created += 1
+            continue
+
+        # Update existing audit only if safe (do not overwrite in-progress audits)
+        status = _normalize_text(existing_audit.get("status", "")) or "Assigned"
+        if status in {"Created", "Assigned"}:
+            existing_audit["title"] = title or existing_audit.get("title", "")
+            existing_audit["scope"] = cal_scope or existing_audit.get("scope", "")
+            existing_audit["audited_department"] = dept
+            existing_audit["required_skills"] = required
+            existing_audit["assigned_auditor"] = auditor_name
+            existing_audit["due_date"] = str(s.get("plan_date") or existing_audit.get("due_date", ""))
+            if notes:
+                existing_audit["plan_slot_notes"] = notes
+            if status == "Created":
+                existing_audit["status"] = "Assigned"
+
+            _save_updated_audit(existing_audit, tenant_id=tenant_id)
+            updated += 1
+
+    return created, updated
+
 def get_audit_plan_by_calendar_audit(tenant_id: str, calendar_audit_id: str) -> Optional[Dict[str, Any]]:
     init_db()
     row = _fetch_one(
@@ -3040,6 +3307,15 @@ def update_audit_plan_slots(
         )
 
     _execute("update audit_plans set updated_at=datetime('now') where tenant_id=? and plan_id=?;", (tenant_id, plan_id))
+
+    # Sync: create/update audits from filled plan slots so auditors can see assigned audits
+    try:
+        created_cnt, updated_cnt = _sync_plan_slots_to_audits(tenant_id, plan_id)
+    except Exception:
+        created_cnt, updated_cnt = 0, 0
+
+    if created_cnt or updated_cnt:
+        return True, f"Audit plan saved. Audits synced: {created_cnt} created, {updated_cnt} updated."
     return True, "Audit plan saved."
 
 def auto_assign_auditors(
@@ -3086,5 +3362,12 @@ def auto_assign_auditors(
 
     if changed:
         _execute("update audit_plans set updated_at=datetime('now') where tenant_id=? and plan_id=?;", (tenant_id, plan_id))
+    
+
+    # Sync: create/update audits after auto-assign so auditors see them immediately
+    try:
+        _sync_plan_slots_to_audits(tenant_id, plan_id)
+    except Exception:
+        pass
     return True, f"Auto-assigned {changed} slot(s)."
 

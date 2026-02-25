@@ -1821,257 +1821,96 @@ def page_admin_checklist():
 
 
 
+
 def page_auditor_checklist():
-        st.title("Checklist (Auditor)")
-        st.caption("Fill Observation and Evidence for your assigned audits. You can also add extra checklist points for the selected audit.")
+    st.title("Checklist (Auditor)")
+    st.caption("Answer checklist points one-by-one. The next question unlocks only after you save Observation and Evidence for the current one.")
 
-        import pandas as pd
+    if not person_name:
+        st.error("Auditor profile not linked to this account.")
+        st.stop()
 
-        if not person_name:
-            st.error("Auditor profile not linked to this account.")
-            st.stop()
+    if not my_audits:
+        st.info("No audits assigned to you yet.")
+        st.stop()
 
-        if not my_audits:
-            st.info("No audits assigned to you yet.")
-            st.stop()
+    if not checklist_department:
+        st.info("Select a department from the sidebar Checklist sub-menu.")
+        st.stop()
 
-        if not checklist_department:
-            st.info("Select a department from the sidebar Checklist sub-menu.")
-            st.stop()
+    dept = checklist_department.strip()
+    dept_audits = [
+        a for a in my_audits
+        if (a.get("audited_department") or "").strip().lower() == dept.lower()
+    ]
 
-        dept = checklist_department.strip()
-        dept_audits = [
-            a for a in my_audits
-            if (a.get("audited_department") or "").strip().lower() == dept.lower()
-        ]
+    if not dept_audits:
+        st.info(f"No audits assigned to you for department: {dept}")
+        st.stop()
 
-        if not dept_audits:
-            st.info(f"No audits assigned to you for department: {dept}")
-            st.stop()
+    labels, label_to_id = build_audit_dropdown(
+        dept_audits,
+        restrict_to_auditor=False,
+        auditor_name=None,
+    )
+    selected_label = st.selectbox("Select Audit", options=labels, key=f"aud_chk_pick_audit_{dept}")
+    audit_id = label_to_id[selected_label]
 
-        labels, label_to_id = build_audit_dropdown(
-            dept_audits,
-            restrict_to_auditor=False,
-            auditor_name=None,
-        )
-        selected_label = st.selectbox("Select Audit", options=labels, key=f"aud_chk_pick_audit_{dept}")
-        audit_id = label_to_id[selected_label]
+    audit = _engine_call("get_audit", audit_id)
+    if not audit:
+        st.error("Audit not found.")
+        st.stop()
 
+    # Auto-start audit on first checklist interaction
+    if audit.get("assigned_auditor") == person_name and audit.get("status") == "Assigned":
+        _engine_call("set_audit_status", audit_id, "In Progress")
         audit = _engine_call("get_audit", audit_id)
-        if not audit:
-            st.error("Audit not found.")
-            st.stop()
 
-        if audit.get("assigned_auditor") == person_name and audit.get("status") == "Assigned":
-            _engine_call("set_audit_status", audit_id, "In Progress")
-            audit = _engine_call("get_audit", audit_id)
+    sections = _engine_call("get_sections_for_department", dept)
+    if not sections:
+        st.info(f"No checklist sections found for department '{dept}'. Ask admin to create sections in Admin → Checklist.")
+        st.stop()
 
-        sections = _engine_call("get_sections_for_department", dept)
-        if not sections:
-            st.info(f"No checklist sections found for department '{dept}'. Ask admin to create sections in Admin → Checklist.")
-            st.stop()
+    st.subheader("Department Checklist (Sequential)")
+    section = st.selectbox("Select Checklist Section", options=sections, key=f"aud_chk_section_{audit_id}_{dept}")
 
-        st.subheader("Department Checklist (Section-wise)")
-        section = st.selectbox("Select Checklist Section", options=sections, key=f"aud_chk_section_{audit_id}_{dept}")
+    can_edit = (
+        audit.get("assigned_auditor") == person_name
+        and audit.get("status") == "In Progress"
+    )
+    if not can_edit:
+        st.warning("Checklist is locked. You can edit only when this audit is 'In Progress' and assigned to you.")
 
-        saved_rows = _engine_call("load_audit_section_table", audit_id, dept, section)
-        if saved_rows:
-            df = pd.DataFrame(saved_rows)
-            df = df.rename(columns={
-                "sr_no": "SR No",
-                "checklist": "Checklist",
-                "observation": "Observation",
-                "evidence": "Evidence",
-            })
-        else:
-            items = _engine_call("get_items_for_department_section", dept, section)
-            df = pd.DataFrame({
-                "SR No": list(range(1, len(items) + 1)),
-                "Checklist": items,
-                "Observation": ["" for _ in items],
-                "Evidence": ["" for _ in items],
-            })
+    # Load rows (initializes from catalog if empty)
+    rows = _engine_call("get_checklist_rows_for_audit_section", audit_id, dept, section)
+    prog = _engine_call("get_checklist_progress", audit_id, dept, section)
 
-        st.caption("Fill Observation and Evidence for every checklist point. You can add extra checklist points for this audit and section.")
+    total = int(prog.get("total", 0) or 0)
+    unlocked = int(prog.get("unlocked", 0) or 0)
+    completed_prefix = int(prog.get("completed_prefix", 0) or 0)
 
-        can_edit = (
-            audit.get("assigned_auditor") == person_name
-            and audit.get("status") == "In Progress"
-        )
+    if total == 0:
+        st.info("No checklist items found in this section.")
+        return
 
-        if not can_edit:
-            st.warning("Checklist is locked. You can edit only when this audit is 'In Progress' and assigned to you.")
+    # Progress UI
+    st.progress(completed_prefix / total if total else 0.0)
+    st.caption(f"Progress: {completed_prefix}/{total} completed in sequence. Unlocked: {unlocked}/{total}.")
 
-        with st.expander("Add extra checklist point (optional)", expanded=False):
-            extra_text = st.text_input("New checklist point", key=f"aud_extra_item_{audit_id}_{dept}_{section}")
-            if st.button("Add checklist point", key=f"aud_extra_add_{audit_id}_{dept}_{section}", disabled=not can_edit):
-                if not extra_text.strip():
-                    st.error("Please enter a checklist point.")
-                else:
-                    ok, msg = _engine_call(
-                        "add_audit_section_checklist_item",
-                        audit_id=audit_id,
-                        dept=dept,
-                        section=section,
-                        checklist_text=extra_text.strip(),
-                        auditor_name=person_name,
-                    )
-                    if ok:
-                        st.success(msg)
-                        st.rerun()
-                    else:
-                        st.error(msg)
-
-        edited = st.data_editor(
-            df,
-            use_container_width=True,
-            disabled=["SR No", "Checklist"] if can_edit else ["SR No", "Checklist", "Observation", "Evidence"],
-            key=f"aud_chk_editor_{audit_id}_{dept}_{section}",
-        )
-
-        if st.button(
-            "Save Checklist Observations",
-            type="primary",
-            key=f"aud_chk_save_{audit_id}_{dept}_{section}",
-            disabled=not can_edit,
-        ):
-            rows_to_save = []
-            for _, r in edited.iterrows():
-                rows_to_save.append({
-                    "sr_no": str(r.get("SR No", "")).strip(),
-                    "checklist": str(r.get("Checklist", "")).strip(),
-                    "observation": str(r.get("Observation", "")).strip(),
-                    "evidence": str(r.get("Evidence", "")).strip(),
-                })
-
-            ok, msg = _engine_call(
-                "save_audit_section_table",
-                audit_id,
-                dept,
-                section,
-                rows_to_save,
-                auditor_name=person_name,
-            )
-            if ok:
-                st.success("Checklist saved.")
-                st.rerun()
+    # Add extra checklist point (still allowed, but it will appear at the end)
+    with st.expander("Add extra checklist point (optional)", expanded=False):
+        extra_text = st.text_input("New checklist point", key=f"aud_extra_item_{audit_id}_{dept}_{section}")
+        if st.button("Add checklist point", key=f"aud_extra_add_{audit_id}_{dept}_{section}", disabled=not can_edit):
+            if not extra_text.strip():
+                st.error("Please enter a checklist point.")
             else:
-                st.error(msg)
-
-
-    # ============================================================
-    # Audit Details (Admin + Auditor)
-    # ============================================================
-
-def page_audit_details():
-        st.title("Audit Details")
-        render_status_legend()
-        st.write("")
-
-        labels, label_to_id = build_audit_dropdown(
-            all_audits,
-            restrict_to_auditor=(role == "auditor"),
-            auditor_name=person_name,
-        )
-
-        if not labels:
-            st.warning("No audits available.")
-            st.stop()
-
-        selected_label = st.selectbox("Select Audit ID", options=labels, key="audit_details_select")
-        selected_id = label_to_id[selected_label]
-
-        audit = _engine_call("get_audit", selected_id) if selected_id else None
-        if not audit:
-            st.warning("Select an audit.")
-            st.stop()
-
-        if role == "auditor" and audit.get("assigned_auditor") != person_name:
-            st.error("Access denied. You can view only audits assigned to you.")
-            st.stop()
-
-        skill_cat = get_skill_catalog()
-
-        st.subheader("Summary")
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Status", audit.get("status"))
-        c2.metric("Department", audit.get("audited_department"))
-        c3.metric("Auditor", audit.get("assigned_auditor"))
-        c4.metric("Reports Uploaded", len(audit.get("reports", [])))
-
-        st.write("**Title:**", audit.get("title") or "-")
-        st.write("**Scope:**", audit.get("scope") or "-")
-
-        req_keys = audit.get("required_skills", [])
-        st.write("**Required Skills:**", ", ".join([skill_cat.get(k, k) for k in req_keys]) or "-")
-
-        st.write("**Created:**", audit.get("created_at"))
-        st.write("**Due:**", audit.get("due_date") or "-")
-        st.write("**Report Submitted At:**", audit.get("report_submitted_at") or "-")
-        st.write("**Closed At:**", audit.get("closed_at") or "-")
-
-        # ----------------------------
-        # Reports (list + download)
-        # ----------------------------
-        st.write("")
-        st.subheader("Reports")
-
-        reports = audit.get("reports", []) or []
-        if not reports:
-            st.info("No reports uploaded yet.")
-        else:
-            for idx, r in enumerate(reports, start=1):
-                file_name = r.get("file_name") or f"report_{idx}"
-                uploaded_by = r.get("uploaded_by") or "-"
-                uploaded_at = r.get("uploaded_at") or "-"
-                saved_path = r.get("saved_path") or ""
-
-                with st.container(border=True):
-                    st.write(f"**{file_name}**")
-                    st.write(f"Uploaded by: {uploaded_by}")
-                    st.write(f"Uploaded at: {uploaded_at}")
-
-                    if saved_path and os.path.exists(saved_path):
-                        try:
-                            with open(saved_path, "rb") as f:
-                                st.download_button(
-                                    label="Download",
-                                    data=f.read(),
-                                    file_name=file_name,
-                                    mime="application/octet-stream",
-                                    key=f"dl_report_{audit.get('audit_id')}_{idx}",
-                                )
-                        except Exception:
-                            st.warning("Download unavailable for this file.")
-                    else:
-                        st.warning("File path not found on server.")
-
-        # ----------------------------
-        # Auditor Actions (Upload + Submit + Complete) on Audit Details page
-        # ----------------------------
-        if role == "auditor":
-            st.write("")
-            st.subheader("Auditor Actions")
-
-            can_submit = (
-                audit.get("assigned_auditor") == person_name
-                and audit.get("status") == "In Progress"
-            )
-
-            st.markdown("#### 1) Upload Report (PDF/XLSX/XLS/CSV)")
-            up = st.file_uploader(
-                "Choose a file",
-                type=["pdf", "xlsx", "xls", "csv"],
-                key=f"ad_up_{audit.get('audit_id')}",
-            )
-
-            if st.button("Upload Report", type="primary", disabled=(not can_submit or up is None), key=f"ad_btn_up_{audit.get('audit_id')}"):
                 ok, msg = _engine_call(
-                    "save_report_file",
-                    audit_id=audit["audit_id"],
-                    uploaded_by=person_name,
-                    original_filename=up.name,
-                    file_bytes=up.getvalue(),
+                    "add_audit_section_checklist_item",
+                    audit_id=audit_id,
+                    dept=dept,
+                    section=section,
+                    checklist_text=extra_text.strip(),
+                    auditor_name=person_name,
                 )
                 if ok:
                     st.success(msg)
@@ -2079,50 +1918,288 @@ def page_audit_details():
                 else:
                     st.error(msg)
 
-            st.markdown("#### 2) Submit Report (mandatory before completing)")
-            checklist_ok, checklist_msg = _engine_call("validate_audit_checklists_complete", audit["audit_id"])
-            if not checklist_ok:
-                st.info(checklist_msg)
+    # Determine which row to show (one at a time)
+    ss_idx_key = f"seq_idx::{audit_id}::{dept}::{section}"
+    default_idx = min(completed_prefix, max(total - 1, 0))  # next unanswered, or last if done
+    if ss_idx_key not in st.session_state:
+        st.session_state[ss_idx_key] = default_idx
 
-            submit_disabled = (not can_submit) or (not checklist_ok) or (len(audit.get("reports", []) or []) == 0)
+    # Clamp index inside unlocked range (auditor cannot jump ahead)
+    max_allowed_idx = max(unlocked - 1, 0)
+    cur_idx = int(st.session_state[ss_idx_key] or 0)
+    cur_idx = max(0, min(cur_idx, max_allowed_idx))
+    st.session_state[ss_idx_key] = cur_idx
 
-            if st.button("Submit Report", type="primary", disabled=submit_disabled, key=f"ad_btn_submit_{audit.get('audit_id')}"):
-                ok, msg = _engine_call("submit_report", audit["audit_id"], person_name)
+    current = rows[cur_idx]
+    sr_no = str(current.get("sr_no", "")).strip() or str(cur_idx + 1)
+    q_text = str(current.get("checklist", "")).strip()
+
+    st.markdown(
+        f"""
+        <div style="background:#ffffff;border:1px solid #e5e7eb;border-radius:16px;padding:14px 14px 10px 14px;
+                    box-shadow:0 10px 24px rgba(15,23,42,0.06);">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+            <div style="font-weight:950;color:#0f172a;font-size:14px;">Question {cur_idx + 1} of {total}</div>
+            <div style="font-weight:900;color:#64748b;font-size:12px;">SR No: {sr_no}</div>
+          </div>
+          <div style="margin-top:8px;color:#0f172a;font-size:14px;font-weight:800;">{q_text if q_text else "—"}</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.write("")
+
+    obs_key = f"seq_obs::{audit_id}::{dept}::{section}::{sr_no}"
+    ev_key = f"seq_ev::{audit_id}::{dept}::{section}::{sr_no}"
+
+    # Pre-fill inputs from saved values
+    if obs_key not in st.session_state:
+        st.session_state[obs_key] = str(current.get("observation", "") or "")
+    if ev_key not in st.session_state:
+        st.session_state[ev_key] = str(current.get("evidence", "") or "")
+
+    observation = st.text_area("Observation *", key=obs_key, height=110, disabled=not can_edit)
+    evidence = st.text_area("Evidence *", key=ev_key, height=90, disabled=not can_edit)
+
+    nav1, nav2, nav3, nav4 = st.columns([1.2, 1.2, 2.5, 2.0])
+    with nav1:
+        prev_disabled = (cur_idx <= 0)
+        if st.button("← Previous", disabled=prev_disabled, use_container_width=True, key=f"seq_prev_{audit_id}_{dept}_{section}"):
+            st.session_state[ss_idx_key] = max(0, cur_idx - 1)
+            st.rerun()
+
+    with nav2:
+        # Save without advancing (useful for edits)
+        if st.button("Save", type="secondary", disabled=not can_edit, use_container_width=True, key=f"seq_save_{audit_id}_{dept}_{section}_{sr_no}"):
+            if not str(observation or "").strip() or not str(evidence or "").strip():
+                st.error("Observation and Evidence are required to save.")
+            else:
+                ok, msg = _engine_call(
+                    "save_single_checklist_response",
+                    audit_id=audit_id,
+                    dept=dept,
+                    section=section,
+                    sr_no=sr_no,
+                    observation=observation,
+                    evidence=evidence,
+                    auditor_name=person_name,
+                )
                 if ok:
-                    st.success(msg)
+                    st.success("Saved.")
                     st.rerun()
                 else:
                     st.error(msg)
 
-            st.markdown("#### 3) Complete Audit (blocked without submission)")
-            if st.button("Complete Audit", disabled=(not can_submit), key=f"ad_btn_complete_{audit.get('audit_id')}"):
-                ok, msg = _engine_call("complete_audit", audit["audit_id"], person_name)
+    with nav4:
+        # Save and move to next unlocked row (which becomes unlocked by this save)
+        next_label = "Save & Next →" if (cur_idx < total - 1) else "Save"
+        if st.button(next_label, type="primary", disabled=not can_edit, use_container_width=True, key=f"seq_next_{audit_id}_{dept}_{section}_{sr_no}"):
+            if not str(observation or "").strip() or not str(evidence or "").strip():
+                st.error("Observation and Evidence are required to continue.")
+            else:
+                ok, msg = _engine_call(
+                    "save_single_checklist_response",
+                    audit_id=audit_id,
+                    dept=dept,
+                    section=section,
+                    sr_no=sr_no,
+                    observation=observation,
+                    evidence=evidence,
+                    auditor_name=person_name,
+                )
                 if ok:
-                    st.success(msg)
+                    # Recompute unlocked after save, then jump to next if allowed
+                    prog2 = _engine_call("get_checklist_progress", audit_id, dept, section)
+                    unlocked2 = int(prog2.get("unlocked", 0) or 0)
+                    max_allowed2 = max(unlocked2 - 1, 0)
+
+                    if cur_idx < max_allowed2:
+                        st.session_state[ss_idx_key] = cur_idx + 1
+                    else:
+                        st.session_state[ss_idx_key] = min(cur_idx, max_allowed2)
                     st.rerun()
                 else:
                     st.error(msg)
 
-        # ----------------------------
-        # Admin Controls
-        # ----------------------------
-        if role == "admin":
-            st.write("")
-            st.subheader("Admin Controls")
+    # Optional: show already-unlocked answers for review (does NOT unlock future questions)
+    with st.expander("Review unlocked answers", expanded=False):
+        shown = rows[:unlocked]
+        if not shown:
+            st.write("Nothing unlocked yet.")
+        else:
+            for i, r in enumerate(shown, start=1):
+                st.markdown(f"**{i}. {r.get('checklist','')}**")
+                st.write("Observation:", r.get("observation","") or "—")
+                st.write("Evidence:", r.get("evidence","") or "—")
+                st.markdown("---")
 
-            new_status = st.selectbox(
-                "Set Status",
-                ["Assigned", "In Progress", "Report Submitted", "Closed"],
-                index=["Assigned", "In Progress", "Report Submitted", "Closed"].index(audit.get("status", "Assigned")),
-                key=f"ad_status_{audit.get('audit_id')}",
+
+    # ============================================================
+    # Audit Details (Admin + Auditor)
+    # ============================================================
+
+    # ============================================================
+
+def page_audit_details():
+    st.title("Audit Details")
+    render_status_legend()
+    st.write("")
+
+    labels, label_to_id = build_audit_dropdown(
+        all_audits,
+        restrict_to_auditor=(role == "auditor"),
+        auditor_name=person_name,
+    )
+
+    if not labels:
+        st.warning("No audits available.")
+        st.stop()
+
+    selected_label = st.selectbox("Select Audit ID", options=labels, key="audit_details_select")
+    selected_id = label_to_id[selected_label]
+
+    audit = _engine_call("get_audit", selected_id) if selected_id else None
+    if not audit:
+        st.warning("Select an audit.")
+        st.stop()
+
+    if role == "auditor" and audit.get("assigned_auditor") != person_name:
+        st.error("Access denied. You can view only audits assigned to you.")
+        st.stop()
+
+    skill_cat = get_skill_catalog()
+
+    st.subheader("Summary")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Status", audit.get("status"))
+    c2.metric("Department", audit.get("audited_department"))
+    c3.metric("Auditor", audit.get("assigned_auditor"))
+    c4.metric("Reports Uploaded", len(audit.get("reports", [])))
+
+    st.write("**Title:**", audit.get("title") or "-")
+    st.write("**Scope:**", audit.get("scope") or "-")
+
+    req_keys = audit.get("required_skills", [])
+    st.write("**Required Skills:**", ", ".join([skill_cat.get(k, k) for k in req_keys]) or "-")
+
+    st.write("**Created:**", audit.get("created_at"))
+    st.write("**Due:**", audit.get("due_date") or "-")
+    st.write("**Report Submitted At:**", audit.get("report_submitted_at") or "-")
+    st.write("**Closed At:**", audit.get("closed_at") or "-")
+
+    # ----------------------------
+    # Reports (list + download)
+    # ----------------------------
+    st.write("")
+    st.subheader("Reports")
+
+    reports = audit.get("reports", []) or []
+    if not reports:
+        st.info("No reports uploaded yet.")
+    else:
+        for idx, r in enumerate(reports, start=1):
+            file_name = r.get("file_name") or f"report_{idx}"
+            uploaded_by = r.get("uploaded_by") or "-"
+            uploaded_at = r.get("uploaded_at") or "-"
+            saved_path = r.get("saved_path") or ""
+
+            with st.container(border=True):
+                st.write(f"**{file_name}**")
+                st.write(f"Uploaded by: {uploaded_by}")
+                st.write(f"Uploaded at: {uploaded_at}")
+
+                if saved_path and os.path.exists(saved_path):
+                    try:
+                        with open(saved_path, "rb") as f:
+                            st.download_button(
+                                label="Download",
+                                data=f.read(),
+                                file_name=file_name,
+                                mime="application/octet-stream",
+                                key=f"dl_report_{audit.get('audit_id')}_{idx}",
+                            )
+                    except Exception:
+                        st.warning("Download unavailable for this file.")
+                else:
+                    st.warning("File path not found on server.")
+
+    # ----------------------------
+    # Auditor Actions (Upload + Submit + Complete) on Audit Details page
+    # ----------------------------
+    if role == "auditor":
+        st.write("")
+        st.subheader("Auditor Actions")
+
+        can_submit = (
+            audit.get("assigned_auditor") == person_name
+            and audit.get("status") == "In Progress"
+        )
+
+        st.markdown("#### 1) Upload Report (PDF/XLSX/XLS/CSV)")
+        up = st.file_uploader(
+            "Choose a file",
+            type=["pdf", "xlsx", "xls", "csv"],
+            key=f"ad_up_{audit.get('audit_id')}",
+        )
+
+        if st.button("Upload Report", type="primary", disabled=(not can_submit or up is None), key=f"ad_btn_up_{audit.get('audit_id')}"):
+            ok, msg = _engine_call(
+                "save_report_file",
+                audit_id=audit["audit_id"],
+                uploaded_by=person_name,
+                original_filename=up.name,
+                file_bytes=up.getvalue(),
             )
-            if st.button("Update Status", key=f"ad_status_btn_{audit.get('audit_id')}"):
-                ok, msg = _engine_call("set_audit_status", audit["audit_id"], new_status)
-                if ok:
-                    st.success(msg)
-                    st.rerun()
-                else:
-                    st.error(msg)
+            if ok:
+                st.success(msg)
+                st.rerun()
+            else:
+                st.error(msg)
+
+        st.markdown("#### 2) Submit Report (mandatory before completing)")
+        checklist_ok, checklist_msg = _engine_call("validate_audit_checklists_complete", audit["audit_id"])
+        if not checklist_ok:
+            st.info(checklist_msg)
+
+        submit_disabled = (not can_submit) or (not checklist_ok) or (len(audit.get("reports", []) or []) == 0)
+
+        if st.button("Submit Report", type="primary", disabled=submit_disabled, key=f"ad_btn_submit_{audit.get('audit_id')}"):
+            ok, msg = _engine_call("submit_report", audit["audit_id"], person_name)
+            if ok:
+                st.success(msg)
+                st.rerun()
+            else:
+                st.error(msg)
+
+        st.markdown("#### 3) Complete Audit (blocked without submission)")
+        if st.button("Complete Audit", disabled=(not can_submit), key=f"ad_btn_complete_{audit.get('audit_id')}"):
+            ok, msg = _engine_call("complete_audit", audit["audit_id"], person_name)
+            if ok:
+                st.success(msg)
+                st.rerun()
+            else:
+                st.error(msg)
+
+    # ----------------------------
+    # Admin Controls
+    # ----------------------------
+    if role == "admin":
+        st.write("")
+        st.subheader("Admin Controls")
+
+        new_status = st.selectbox(
+            "Set Status",
+            ["Assigned", "In Progress", "Report Submitted", "Closed"],
+            index=["Assigned", "In Progress", "Report Submitted", "Closed"].index(audit.get("status", "Assigned")),
+            key=f"ad_status_{audit.get('audit_id')}",
+        )
+        if st.button("Update Status", key=f"ad_status_btn_{audit.get('audit_id')}"):
+            ok, msg = _engine_call("set_audit_status", audit["audit_id"], new_status)
+            if ok:
+                st.success(msg)
+                st.rerun()
+            else:
+                st.error(msg)
 
 
     # ============================================================
@@ -2403,11 +2480,33 @@ if role == "admin":
     elif page == "Auditors & Skills":
         page_admin_auditors_skills()
     elif page == "Checklist":
-        depts = _get_checklist_catalog_depts() or _engine_call("load_departments_catalog")
-        if not depts:
+        tenant_id = (st.session_state.get("auth") or {}).get("tenant_id")
+        depts = _engine_call("load_departments_catalog", tenant_id=tenant_id) or []
+        depts = [d for d in depts if str(d).strip()]
+        depts = sorted(set(depts), key=lambda x: str(x).lower())
+
+        add_key = "➕ Add new department"
+        options = depts + ([add_key] if add_key not in depts else [])
+
+        if not options:
             st.info("No departments found.")
         else:
-            checklist_department = st.selectbox("Department", options=depts)
+            choice = st.selectbox("Department", options=options, key="chk_dept_select")
+            if choice == add_key:
+                new_dept = st.text_input("New Department Name", key="chk_new_dept_name").strip()
+                if st.button("Add Department", type="primary", key="chk_add_dept_btn"):
+                    if not new_dept:
+                        st.error("Please enter a department name.")
+                    else:
+                        _engine_call("add_department_to_catalog", new_dept, tenant_id=tenant_id)
+                        st.success(f"Added department: {new_dept}")
+                        try:
+                            st.rerun()
+                        except Exception:
+                            st.experimental_rerun()
+                st.stop()
+
+            checklist_department = choice
             globals()["checklist_department"] = checklist_department
             page_admin_checklist()
     elif page == "Audit Details":
@@ -2419,6 +2518,131 @@ else:
     if page == "Dashboard":
         render_panel("Auditor Dashboard", "Your assigned audits and actions.")
         st.metric("Assigned Audits", len(my_audits))
+
+        
+        
+
+        st.markdown("---")
+
+        st.markdown(
+            """
+            <style>
+              /* Auditor Operating Guide: enterprise card */
+              .aog-card{
+                background:#ffffff;
+                border:1px solid #e5e7eb;
+                border-radius:14px;
+                padding:16px 16px 12px 16px;
+                box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06);
+                margin-top:10px;
+              }
+
+              .aog-head{
+                display:flex;
+                align-items:flex-start;
+                justify-content:space-between;
+                gap:12px;
+                margin-bottom:10px;
+              }
+
+              .aog-title{
+                font-size:15px;
+                font-weight:800;
+                color:#0f172a;
+                margin:0;
+                letter-spacing:0.2px;
+              }
+
+              .aog-sub{
+                font-size:12.5px;
+                color:#64748b;
+                margin:4px 0 0 0;
+                line-height:1.4;
+              }
+
+              .aog-tag{
+                font-size:12px;
+                font-weight:700;
+                color:#0f172a;
+                background:#f8fafc;
+                border:1px solid #e5e7eb;
+                border-radius:999px;
+                padding:6px 10px;
+                white-space:nowrap;
+              }
+
+              .aog-list{
+                margin:0;
+                padding-left:18px;
+                color:#0f172a;
+              }
+
+              .aog-list li{
+                margin:8px 0;
+                font-size:13px;
+                line-height:1.45;
+                color:#334155;
+              }
+
+              .aog-list b{
+                color:#0f172a;
+              }
+
+              .aog-foot{
+                margin-top:12px;
+                padding-top:10px;
+                border-top:1px dashed #e5e7eb;
+                display:flex;
+                gap:8px;
+                flex-wrap:wrap;
+                align-items:center;
+                color:#64748b;
+                font-size:12.3px;
+                line-height:1.4;
+              }
+
+              .aog-pill{
+                display:inline-block;
+                padding:2px 8px;
+                border-radius:999px;
+                border:1px solid #e5e7eb;
+                background:#f8fafc;
+                color:#0f172a;
+                font-size:11.5px;
+                font-weight:700;
+              }
+            </style>
+
+            <div class="aog-card">
+              <div class="aog-head">
+                <div>
+                  <div class="aog-title">Auditor Operating Guide</div>
+                  <div class="aog-sub">Follow this sequence to complete an audit with accurate records and clean closure.</div>
+                </div>
+                <div class="aog-tag">Quick Guide</div>
+              </div>
+
+              <ol class="aog-list">
+                <li><b>Verify session:</b> Confirm the correct <b>Tenant</b>, <b>Username</b>, and <b>Role (Auditor)</b>.</li>
+                <li><b>Review assigned audit:</b> Open <b>My Audits</b> and verify department, scope, and due date.</li>
+                <li><b>Start audit:</b> Set status to <b>In Progress</b> before entering checklist data.</li>
+                <li><b>Complete checklist:</b> Record clear <b>Observations</b> and attach/reference <b>Evidence</b> for each item.</li>
+                <li><b>Validate details:</b> Review entries in <b>Audit Details</b> for completeness before submission.</li>
+                <li><b>Submit report:</b> Upload the finalized report in <b>Reports</b> and submit as per workflow.</li>
+                <li><b>Logout:</b> Sign out after completion, especially on shared systems.</li>
+              </ol>
+
+              <div class="aog-foot">
+                Navigation:
+                <span class="aog-pill">My Audits</span>
+                <span class="aog-pill">Checklist</span>
+                <span class="aog-pill">Audit Details</span>
+                <span class="aog-pill">Reports</span>
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
     elif page == "My Audits":
         page_auditor_my_audits()
     elif page == "Checklist":
