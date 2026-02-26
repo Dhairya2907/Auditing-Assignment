@@ -769,11 +769,11 @@ def _cached_skills_catalog(tenant_id: Optional[str]):
 
 @st.cache_data(ttl=30)
 def _cached_people(tenant_id: Optional[str]):
-    return _cached_people(tenant_id) or []
+    return _engine_call("list_people_records", tenant_id=tenant_id) or []
 
 @st.cache_data(ttl=15)
 def _cached_state(tenant_id: Optional[str]):
-    return _cached_state(tenant_id) or {}
+    return _engine_call("load_state", tenant_id=tenant_id) or {}
 
 @st.cache_data(ttl=60)
 def _cached_sections_for_dept(tenant_id: Optional[str], dept: str):
@@ -1602,6 +1602,7 @@ def page_admin_menu():
     st.info("Use the tabs above to navigate. This page is a launchpad for your most common tasks.")
 
 def page_admin_dashboard():
+    tenant_id = _current_tenant_id()
     st.title("Admin Dashboard")
     render_panel("Portfolio Overview", "Visibility into audits, reports, and auditor availability.")
     st.write("")
@@ -2263,10 +2264,14 @@ def page_audit_details():
         st.write("")
         st.subheader("Admin Controls")
 
+        _status_options = ["Created", "Assigned", "In Progress", "Report Submitted", "Closed"]
+        _current_status = (audit.get("status") or "Assigned")
+        if _current_status not in _status_options:
+            _current_status = "Assigned"
         new_status = st.selectbox(
             "Set Status",
-            ["Assigned", "In Progress", "Report Submitted", "Closed"],
-            index=["Assigned", "In Progress", "Report Submitted", "Closed"].index(audit.get("status", "Assigned")),
+            _status_options,
+            index=_status_options.index(_current_status),
             key=f"ad_status_{audit.get('audit_id')}",
         )
         if st.button("Update Status", key=f"ad_status_btn_{audit.get('audit_id')}"):

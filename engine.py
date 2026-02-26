@@ -16,6 +16,23 @@ except Exception:  # psycopg2-binary not installed in local dev
     psycopg2 = None
 
 
+
+
+class AttrDict(dict):
+    """dict that also supports attribute access (row.key) for backward compatible app.py code."""
+    def __getattr__(self, name):
+        try:
+            return self[name]
+        except KeyError as e:
+            raise AttributeError(name) from e
+    def __setattr__(self, name, value):
+        self[name] = value
+    def __delattr__(self, name):
+        try:
+            del self[name]
+        except KeyError as e:
+            raise AttributeError(name) from e
+
 from dataclasses import dataclass
 from datetime import datetime, date, timedelta
 from typing import Any, Dict, List, Set, Optional, Tuple
@@ -1373,9 +1390,10 @@ def get_sections_for_department(dept: str, tenant_id: Optional[str] = None) -> L
     dept = _normalize_text(dept)
     rows = _fetch_all(
         """
-        select distinct section
+        select section
         from checklists_catalog
         where tenant_id = ? and department = ?
+        group by section
         order by lower(section);
         """,
         (tenant_id, dept),
@@ -1705,8 +1723,8 @@ def load_people(tenant_id: Optional[str] = None) -> List[Person]:
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
 
     people_rows = _fetch_all(
-        "select name, department, level from people where tenant_id = ? and is_active = 1 order by lower(name);",
-        (tenant_id,),
+        "select name, department, level from people where tenant_id = ? and is_active = ? order by lower(name);",
+        (tenant_id, True),
     )
     skills_rows = _fetch_all(
         "select person_name, skill_key from person_skills where tenant_id = ?;",
@@ -1729,13 +1747,13 @@ def load_people(tenant_id: Optional[str] = None) -> List[Person]:
         out.append(Person(name=nm, department=dept, skills=skill_map.get(nm, set()), level=level))
     return out
 
-def list_people_records(tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
+def list_people_records(tenant_id: Optional[str] = None) -> List[AttrDict]:
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
     rows = _fetch_all(
         "select name, department, level, is_active, created_at from people where tenant_id = ? order by lower(name);",
         (tenant_id,),
     )
-    out: List[Dict[str, Any]] = []
+    out: List[AttrDict] = []
     skill_rows = _fetch_all(
         "select person_name, skill_key from person_skills where tenant_id = ?;",
         (tenant_id,),
@@ -1746,14 +1764,14 @@ def list_people_records(tenant_id: Optional[str] = None) -> List[Dict[str, Any]]
     for r in rows:
         nm = _normalize_text(r["name"])
         out.append(
-            {
+            AttrDict({
                 "name": nm,
                 "department": _normalize_text(r["department"]),
                 "skills": sorted(set(smap.get(nm, []))),
                 "level": str(r["level"]).strip().lower(),
-                "is_active": bool(int(r["is_active"])),
+                "is_active": (bool(r["is_active"]) if isinstance(r["is_active"], (bool,)) else bool(int(r["is_active"]))),
                 "created_at": r["created_at"],
-            }
+            })
         )
     return out
 
@@ -1785,7 +1803,7 @@ def load_users(tenant_id: Optional[str] = None) -> Dict[str, Any]:
                     "hash": r["password_hash"],
                 },
                 "created_at": r["created_at"],
-                "is_active": bool(int(r["is_active"])),
+                "is_active": (bool(r["is_active"]) if isinstance(r["is_active"], (bool,)) else bool(int(r["is_active"]))),
             }
         )
     return {"users": users}
@@ -2309,11 +2327,16 @@ def set_audit_status(audit_id: str, new_status: str, tenant_id: Optional[str] = 
     if not a:
         return False, "Audit not found."
 
-    allowed = {"Assigned", "In Progress", "Report Submitted", "Closed"}
+    allowed = {"Created", "Assigned", "In Progress", "Report Submitted", "Closed"}
     if new_status not in allowed:
         return False, f"Invalid status: {new_status}"
 
     current = a.get("status") or "Assigned"
+
+    # Allow moving to 'In Progress' only from Created/Assigned (or staying In Progress)
+    if new_status == "In Progress":
+        if current not in {"Created", "Assigned", "In Progress"}:
+            return False, "Can set 'In Progress' only from 'Created' or 'Assigned'."
 
     if new_status == "Report Submitted":
         if current != "In Progress":
@@ -2600,13 +2623,13 @@ def list_final_generated_reports_for_user(
         """
         select id, created_by, created_at, summary, audit_ids_json, allowed_users_json, pdf_rel_path
         from generated_final_reports
-        where tenant_id = ? and is_deleted = 0
+        where tenant_id = ? and is_deleted = ?
         order by created_at desc;
         """,
-        (tenant_id,),
+        (tenant_id, False),
     )
 
-    out: List[Dict[str, Any]] = []
+    out: List[AttrDict] = []
     for r in rows:
         allowed = []
         try:
