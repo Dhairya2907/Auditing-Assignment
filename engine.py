@@ -1110,11 +1110,12 @@ def ensure_seed_files(tenant_code: str = "", tenant_name: str = "") -> str:
             """
             insert into users
             (id, tenant_id, username, role, person_name, password_salt, password_iterations, password_hash, is_active, created_at)
-            values (?, ?, ?, ?, ?, ?, ?, ?, 1, ?);
+            values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
             (
                 _uuid(), tenant_id, "admin", "admin", None,
                 admin_pw["salt"], int(admin_pw["iterations"]), admin_pw["hash"],
+                True,
                 _now_iso(),
             ),
         )
@@ -3076,9 +3077,9 @@ def add_auditor(
     _execute(
         """
         insert into people (id, tenant_id, name, department, level, is_active, created_at)
-        values (?, ?, ?, ?, ?, 1, ?);
+        values (?, ?, ?, ?, ?, ?, ?);
         """,
-        (_uuid(), tenant_id, name, department, level, _now_iso()),
+        (_uuid(), tenant_id, name, department, level, True, _now_iso()),
     )
 
     for kk in sorted(cleaned_skills):
@@ -3109,9 +3110,9 @@ def add_auditor(
         """
         insert into users
         (id, tenant_id, username, role, person_name, password_salt, password_iterations, password_hash, is_active, created_at)
-        values (?, ?, ?, 'auditor', ?, ?, ?, ?, 1, ?);
+        values (?, ?, ?, 'auditor', ?, ?, ?, ?, ?, ?);
         """,
-        (_uuid(), tenant_id, uname, name, pw["salt"], int(pw["iterations"]), pw["hash"], _now_iso()),
+        (_uuid(), tenant_id, uname, name, pw["salt"], int(pw["iterations"]), pw["hash"], True, _now_iso()),
     )
 
     return True, f"Auditor added successfully. Username: {uname} | Password: {password}"
