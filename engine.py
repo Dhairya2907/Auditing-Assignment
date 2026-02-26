@@ -8,6 +8,14 @@ import hashlib
 import hmac
 import sqlite3
 
+# Optional Postgres (Supabase) support
+try:
+    import psycopg2
+    import psycopg2.extras
+except Exception:  # psycopg2-binary not installed in local dev
+    psycopg2 = None
+
+
 from dataclasses import dataclass
 from datetime import datetime, date, timedelta
 from typing import Any, Dict, List, Set, Optional, Tuple
@@ -53,9 +61,6 @@ def _parse_iso_date(val) -> Optional[date]:
 # SQLite (NO external service) + Multi-tenant storage
 # ============================================================
 
-# Where SQLite DB will be stored
-SQLITE_DB_PATH = os.getenv("SQLITE_DB_PATH", os.path.join("data", "app.db"))
-
 # Uploads root (tenant-separated subfolders)
 UPLOADS_DIR = "uploads"
 
@@ -65,7 +70,7 @@ DEFAULT_TENANT_CODE = os.getenv("DEFAULT_TENANT_CODE", "default")
 # -----------------------------
 # Default seed data (per tenant)
 # -----------------------------
-DEFAULT_DEPARTMENTS = ["HR", "MR", "Purchase", "Sales and Marketing"]
+DEFAULT_DEPARTMENTS = ["HR", "MR", "Purchase", "Sales and Marketing","Production"]
 
 DEFAULT_SKILLS = {
     # HR
@@ -187,14 +192,53 @@ def _verify_password_columns(password: str, salt_hex: str, iterations: int, hash
 
 
 # ============================================================
-# SQLite DB layer
+# Database layer: SQLite (local) OR Postgres (Supabase)
 # ============================================================
-def _connect() -> sqlite3.Connection:
+
+# If DATABASE_URL is set, we use Postgres. Otherwise we use local SQLite.
+DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
+USE_POSTGRES = bool(DATABASE_URL)
+
+# Where SQLite DB will be stored (local dev)
+SQLITE_DB_PATH = os.getenv("SQLITE_DB_PATH", os.path.join("data", "app.db"))
+
+def _pg_url_with_ssl(url: str) -> str:
+    """Ensure sslmode=require for Supabase URLs unless already present."""
+    u = (url or "").strip()
+    if not u:
+        return u
+    if "sslmode=" in u:
+        return u
+    joiner = "&" if "?" in u else "?"
+    return u + f"{joiner}sslmode=require"
+
+def _ph() -> str:
+    return "%s" if USE_POSTGRES else "?"
+
+def _sql(q: str) -> str:
+    """Convert SQLite-style placeholders (?) into psycopg2 placeholders (%s) when using Postgres."""
+    return q.replace("?", "%s") if USE_POSTGRES else q
+
+def _placeholders(n: int) -> str:
+    return ",".join([_ph()] * int(n))
+
+def _connect():
+    """Return a DB connection for the configured backend."""
+    if USE_POSTGRES:
+        if psycopg2 is None:
+            raise RuntimeError(
+                "Postgres requested (DATABASE_URL set) but psycopg2 is not installed. "
+                "Add psycopg2-binary to requirements.txt."
+            )
+        url = _pg_url_with_ssl(DATABASE_URL)
+        conn = psycopg2.connect(url, connect_timeout=15)
+        conn.autocommit = True
+        return conn
+
+    # SQLite fallback
     ensure_dirs()
     conn = sqlite3.connect(SQLITE_DB_PATH, timeout=30, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-
-    # safer multi-user usage
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA synchronous=NORMAL;")
     conn.execute("PRAGMA foreign_keys=ON;")
@@ -202,33 +246,68 @@ def _connect() -> sqlite3.Connection:
     return conn
 
 def _fetch_one(sql: str, params: Tuple[Any, ...] = ()) -> Optional[Dict[str, Any]]:
+    q = _sql(sql)
     with _connect() as conn:
-        cur = conn.execute(sql, params)
+        if USE_POSTGRES:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(q, params)
+                row = cur.fetchone()
+                return dict(row) if row else None
+        cur = conn.execute(q, params)
         row = cur.fetchone()
         return dict(row) if row else None
 
 def _fetch_all(sql: str, params: Tuple[Any, ...] = ()) -> List[Dict[str, Any]]:
+    q = _sql(sql)
     with _connect() as conn:
-        cur = conn.execute(sql, params)
+        if USE_POSTGRES:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(q, params)
+                rows = cur.fetchall()
+                return [dict(r) for r in rows]
+        cur = conn.execute(q, params)
         return [dict(r) for r in cur.fetchall()]
 
 def _execute(sql: str, params: Tuple[Any, ...] = ()) -> int:
+    q = _sql(sql)
     with _connect() as conn:
-        cur = conn.execute(sql, params)
+        if USE_POSTGRES:
+            with conn.cursor() as cur:
+                cur.execute(q, params)
+                return cur.rowcount
+        cur = conn.execute(q, params)
         return cur.rowcount
 
 def _executescript(script: str) -> None:
+    """Run multiple statements. SQLite supports executescript; Postgres needs splitting."""
+    if not script or not str(script).strip():
+        return
+    if not USE_POSTGRES:
+        with _connect() as conn:
+            conn.executescript(script)
+        return
+
+    statements = [s.strip() for s in str(script).split(";") if s.strip()]
     with _connect() as conn:
-        conn.executescript(script)
-
-
-
+        with conn.cursor() as cur:
+            for st in statements:
+                cur.execute(st)
 
 def _table_columns(table: str) -> Set[str]:
-    """Return set of column names for a table (SQLite-safe)."""
+    """Return set of column names for a table."""
+    if USE_POSTGRES:
+        rows = _fetch_all(
+            """
+            select column_name as name
+            from information_schema.columns
+            where table_schema='public' and table_name = ?
+            """,
+            (table,),
+        )
+        return {str(r.get("name")) for r in rows if r.get("name")}
+
     rows = _fetch_all(f"PRAGMA table_info({table})", ())
     return {str(r.get("name")) for r in rows if r.get("name")}
-
 
 def _ensure_column(table: str, col_name: str, col_def_sql: str) -> None:
     cols = _table_columns(table)
@@ -380,7 +459,176 @@ create table if not exists generated_final_reports (
 create index if not exists idx_finalreports_tenant on generated_final_reports(tenant_id);
 create index if not exists idx_finalreports_createdat on generated_final_reports(created_at);
 """
+# Postgres schema (Supabase) - used when DATABASE_URL is set
+_SCHEMA_PG = """
+create table if not exists tenants (
+  id text primary key,
+  tenant_code text not null unique,
+  name text not null,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists users (
+  id text primary key,
+  tenant_id text not null references tenants(id) on delete cascade,
+  username text not null,
+  role text not null check (role in ('admin','manager','auditor')),
+  person_name text,
+  password_salt text not null,
+  password_iterations integer not null,
+  password_hash text not null,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  unique (tenant_id, username)
+);
+create index if not exists idx_users_tenant on users(tenant_id);
+
+create table if not exists departments (
+  id text primary key,
+  tenant_id text not null references tenants(id) on delete cascade,
+  name text not null,
+  created_at timestamptz not null default now(),
+  unique (tenant_id, name)
+);
+create index if not exists idx_departments_tenant on departments(tenant_id);
+
+create table if not exists skills_catalog (
+  id text primary key,
+  tenant_id text not null references tenants(id) on delete cascade,
+  skill_key text not null,
+  skill_label text not null,
+  created_at timestamptz not null default now(),
+  unique (tenant_id, skill_key)
+);
+create index if not exists idx_skills_tenant on skills_catalog(tenant_id);
+
+create table if not exists dept_required_skills (
+  id text primary key,
+  tenant_id text not null references tenants(id) on delete cascade,
+  department_name text not null,
+  skill_key text not null,
+  unique (tenant_id, department_name, skill_key)
+);
+create index if not exists idx_deptreq_tenant on dept_required_skills(tenant_id);
+
+create table if not exists people (
+  id text primary key,
+  tenant_id text not null references tenants(id) on delete cascade,
+  name text not null,
+  department text not null,
+  level text not null check (level in ('experienced','fresher')),
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  unique (tenant_id, name)
+);
+create index if not exists idx_people_tenant on people(tenant_id);
+
+create table if not exists person_skills (
+  id text primary key,
+  tenant_id text not null references tenants(id) on delete cascade,
+  person_name text not null,
+  skill_key text not null,
+  unique (tenant_id, person_name, skill_key)
+);
+create index if not exists idx_personskills_tenant on person_skills(tenant_id);
+
+create table if not exists audits (
+  audit_id text primary key,
+  tenant_id text not null references tenants(id) on delete cascade,
+  title text,
+  scope text,
+  audited_department text not null,
+  required_skills_json text not null,
+  assigned_auditor text not null,
+  auditor_level text not null,
+  status text not null,
+  created_by text not null,
+  created_at timestamptz not null default now(),
+  due_date text,
+  reports_json text not null,
+  report_submitted_at timestamptz,
+  closed_at timestamptz,
+  checklists_json text not null
+);
+create index if not exists idx_audits_tenant on audits(tenant_id);
+
+create table if not exists audit_state (
+  tenant_id text primary key references tenants(id) on delete cascade,
+  busy_by_name_json text not null,
+  audit_history_json text not null
+);
+
+create table if not exists checklists_catalog (
+  id text primary key,
+  tenant_id text not null references tenants(id) on delete cascade,
+  department text not null,
+  section text not null,
+  item_order integer not null,
+  item_text text not null,
+  unique (tenant_id, department, section, item_order)
+);
+create index if not exists idx_chk_tenant on checklists_catalog(tenant_id);
+
+create table if not exists generated_final_reports (
+  id text primary key,
+  tenant_id text not null references tenants(id) on delete cascade,
+  created_by text not null,
+  created_at timestamptz not null default now(),
+  summary text not null,
+  audit_ids_json text not null,
+  allowed_users_json text not null,
+  pdf_rel_path text not null,
+  is_deleted boolean not null default false,
+  deleted_at timestamptz,
+  deleted_by text
+);
+create index if not exists idx_finalreports_tenant on generated_final_reports(tenant_id);
+create index if not exists idx_finalreports_createdat on generated_final_reports(created_at);
+
+-- Audit calendar and planning
+create table if not exists audit_calendar (
+  id text primary key,
+  tenant_id text not null references tenants(id) on delete cascade,
+  title text not null,
+  scope text not null,
+  start_date text not null,
+  end_date text not null,
+  created_by text not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_audit_calendar_tenant on audit_calendar(tenant_id);
+
+create table if not exists audit_plans (
+  plan_id text primary key,
+  tenant_id text not null references tenants(id) on delete cascade,
+  calendar_audit_id text not null references audit_calendar(id) on delete cascade,
+  working_days integer not null,
+  created_by text not null,
+  plan_json text not null default ('{}'),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz,
+  unique (tenant_id, calendar_audit_id)
+);
+create index if not exists idx_audit_plans_tenant on audit_plans(tenant_id);
+
+create table if not exists audit_plan_slots (
+  id text primary key,
+  tenant_id text not null references tenants(id) on delete cascade,
+  plan_id text not null references audit_plans(plan_id) on delete cascade,
+  plan_date text not null,
+  slot_start text not null,
+  slot_end text not null,
+  department text not null,
+  auditor_name text,
+  notes text,
+  audit_id text,
+  unique (tenant_id, plan_id, plan_date, slot_start)
+);
+create index if not exists idx_audit_plan_slots_plan on audit_plan_slots(plan_id);
+"""
 def _repair_audit_plan_schema() -> None:
+    if USE_POSTGRES:
+        return
     """Repair legacy SQLite schemas that cause FK mismatch errors for audit plans.
 
     The error:
@@ -518,14 +766,16 @@ def _repair_audit_plan_schema() -> None:
     _executescript(script)
 
 def init_db() -> None:
-    _executescript(_SCHEMA)
-
+    _executescript(_SCHEMA_PG if USE_POSTGRES else _SCHEMA)
     migrate_db()
 
 
 def migrate_db() -> None:
 
-    """Lightweight, safe migrations for existing SQLite DBs."""
+    """Lightweight, safe migrations."""
+    if USE_POSTGRES:
+        return
+
     # Create new tables if missing (safe for existing installs)
     _executescript(
         """
@@ -725,6 +975,21 @@ def _seed_checklists_if_empty(tenant_id: str) -> None:
                 "Are management review minutes legible, dated, and approved?",
             ],
         },
+
+    "Production": {
+        "BMR": [
+            "Is a Batch Manufacturing Record (BMR) available for each batch/lot produced?",
+            "Is the BMR version controlled and approved before use?",
+            "Are material issue details recorded, including item code, quantity, and traceability to GRN/issue records?",
+            "Are critical process parameters and in-process checks recorded at each required step?",
+            "Are equipment/line clearance and cleaning status recorded before batch start?",
+            "Are yields, reconciliation, and any discrepancies documented and reviewed?",
+            "Are deviations, nonconformities, and rework (if any) documented with appropriate approvals?",
+            "Are operator and verifier signatures and dates present for all applicable steps?",
+            "Is the final review of the BMR performed by an authorized person before batch release or transfer to QA?",
+            "Are any attachments (printouts, labels, log sheets) referenced and traceable within the BMR?"
+        ],
+    },
         "Purchase": {
             "Supplier Selection": [
                 "Is supplier selection initiated when a new material, component, or service is required?",
@@ -770,6 +1035,25 @@ def _seed_checklists_if_empty(tenant_id: str) -> None:
                 "Are re-evaluation outcomes documented?",
             ],
         },
+        "Production": {
+            "BMR": [
+                "PICK UP A BATCH MANUFACTURING RECORD (BMR)",
+                "Are the following details available – batch number, manufacturing start and completion date?",
+                "Are raw material lot numbers mentioned?",
+                "Check for the Certificate of Analysis (COA) of the Raw Materials",
+                "Does the COA give test names, specified and achieved results",
+                "Check the Quality Assurance Plan (QAP)",
+                "Does the QAP give details such test stage, test name, method, sample size, acceptance criteria?",
+                "Are the quantities produced and rejected mentioned in the BMR?",
+                "Is a NCR form filled out in case of rejections?",
+                "Is the NCR report approved by the designated authority?",
+                "Are the instrument IDs mentioned in the BMR?",
+                "Check the calibration log and report of the instruments.",
+                "Do the calibration reports mention name of an accredited lab",
+                "Do the calibration reports mention traceability to national or international standards?"
+
+            ]
+        }
     }
 
     for dept, sections in seed.items():
@@ -910,10 +1194,16 @@ def add_department_to_catalog(dept: str, tenant_id: Optional[str] = None) -> Non
     dept = _normalize_text(dept)
     if not dept:
         return
-    _execute(
-        "insert or ignore into departments (id, tenant_id, name, created_at) values (?, ?, ?, ?);",
-        (_uuid(), tenant_id, dept, _now_iso()),
-    )
+    if USE_POSTGRES:
+        _execute(
+            "insert into departments (id, tenant_id, name, created_at) values (?, ?, ?, ?) on conflict (tenant_id, name) do nothing;",
+            (_uuid(), tenant_id, dept, _now_iso()),
+        )
+    else:
+        _execute(
+            "insert or ignore into departments (id, tenant_id, name, created_at) values (?, ?, ?, ?);",
+            (_uuid(), tenant_id, dept, _now_iso()),
+        )
 
 # ============================================================
 # Catalog: skills (key -> label) (tenant-aware)
@@ -1027,14 +1317,20 @@ def set_dept_required_skills(dept: str, skill_keys: List[str], tenant_id: Option
         (tenant_id, dept),
     )
     for kk in cleaned:
-        _execute(
-            """
+        if USE_POSTGRES:
+            _execute(
+                "insert into dept_required_skills (id, tenant_id, department_name, skill_key) values (?, ?, ?, ?) on conflict (tenant_id, department_name, skill_key) do nothing;",
+                (_uuid(), tenant_id, dept, kk),
+            )
+        else:
+            _execute(
+                """
             insert or ignore into dept_required_skills
             (id, tenant_id, department_name, skill_key)
             values (?, ?, ?, ?);
             """,
-            (_uuid(), tenant_id, dept, kk),
-        )
+                (_uuid(), tenant_id, dept, kk),
+            )
 
 def get_required_skills_for_dept(dept: str, tenant_id: Optional[str] = None) -> Set[str]:
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
@@ -1324,7 +1620,7 @@ def _audit_ids_to_auditors(audit_ids: List[str], tenant_id: str) -> List[str]:
         select audit_id, assigned_auditor
         from audits
         where tenant_id = ? and audit_id in ({})
-        """.format(",".join(["?"] * len(audit_ids))),
+        """.format(_placeholders(len(audit_ids))),
         tuple([tenant_id] + audit_ids),
     )
     auditors: List[str] = []
@@ -2222,7 +2518,7 @@ def register_final_generated_report(
 
     # Validate audits exist for this tenant
     rows = _fetch_all(
-        "select audit_id from audits where tenant_id = ? and audit_id in ({})".format(",".join(["?"] * len(audit_ids_clean))),
+        "select audit_id from audits where tenant_id = ? and audit_id in ({})".format(_placeholders(len(audit_ids_clean))),
         tuple([tenant_id] + audit_ids_clean),
     )
     found = {str(r["audit_id"]) for r in rows}
@@ -2786,13 +3082,19 @@ def add_auditor(
     )
 
     for kk in sorted(cleaned_skills):
-        _execute(
-            """
+        if USE_POSTGRES:
+            _execute(
+                "insert into person_skills (id, tenant_id, person_name, skill_key) values (?, ?, ?, ?) on conflict (tenant_id, person_name, skill_key) do nothing;",
+                (_uuid(), tenant_id, name, kk),
+            )
+        else:
+            _execute(
+                """
             insert or ignore into person_skills (id, tenant_id, person_name, skill_key)
             values (?, ?, ?, ?);
             """,
-            (_uuid(), tenant_id, name, kk),
-        )
+                (_uuid(), tenant_id, name, kk),
+            )
 
     uname = _normalize_username(name)
     user_exists = _fetch_one(
@@ -3210,8 +3512,8 @@ def create_or_reset_audit_plan(
     if existing:
         plan_id = existing["plan_id"]
         _execute(
-            "update audit_plans set working_days=?, updated_at=datetime('now') where tenant_id=? and plan_id=?;",
-            (working_days, tenant_id, plan_id),
+            "update audit_plans set working_days=?, updated_at=? where tenant_id=? and plan_id=?;",
+            (working_days, _now_iso(), tenant_id, plan_id),
         )
                 # Backfill plan_json for older schemas (NOT NULL)
         if "plan_json" in _table_columns("audit_plans"):
@@ -3306,7 +3608,7 @@ def update_audit_plan_slots(
             (department, auditor_name if auditor_name else None, notes, tenant_id, plan_id, plan_date, slot_start, slot_end),
         )
 
-    _execute("update audit_plans set updated_at=datetime('now') where tenant_id=? and plan_id=?;", (tenant_id, plan_id))
+    _execute("update audit_plans set updated_at=? where tenant_id=? and plan_id=?;", (_now_iso(), tenant_id, plan_id))
 
     # Sync: create/update audits from filled plan slots so auditors can see assigned audits
     try:
@@ -3361,7 +3663,7 @@ def auto_assign_auditors(
             changed += 1
 
     if changed:
-        _execute("update audit_plans set updated_at=datetime('now') where tenant_id=? and plan_id=?;", (tenant_id, plan_id))
+        _execute("update audit_plans set updated_at=? where tenant_id=? and plan_id=?;", (_now_iso(), tenant_id, plan_id))
     
 
     # Sync: create/update audits after auto-assign so auditors see them immediately

@@ -671,6 +671,24 @@ def ensure_checklist_seed_data():
                 "Is awareness training conducted for changes to procedures or regulations?",
             ],
         },
+        "Production": {
+        "BMR": [
+                "PICK UP A BATCH MANUFACTURING RECORD (BMR)",
+                "Are the following details available – batch number, manufacturing start and completion date?",
+                "Are raw material lot numbers mentioned?",
+                "Check for the Certificate of Analysis (COA) of the Raw Materials",
+                "Does the COA give test names, specified and achieved results",
+                "Check the Quality Assurance Plan (QAP)",
+                "Does the QAP give details such test stage, test name, method, sample size, acceptance criteria?",
+                "Are the quantities produced and rejected mentioned in the BMR?",
+                "Is a NCR form filled out in case of rejections?",
+                "Is the NCR report approved by the designated authority?",
+                "Are the instrument IDs mentioned in the BMR?",
+                "Check the calibration log and report of the instruments.",
+                "Do the calibration reports mention name of an accredited lab",
+                "Do the calibration reports mention traceability to national or international standards?"
+            ]
+},
     }
 
     changed = False
