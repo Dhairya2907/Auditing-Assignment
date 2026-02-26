@@ -505,11 +505,13 @@ st.set_page_config(
 inject_enterprise_css()
 inject_theme_overrides()
 
-# ✅ MULTI-TENANT: seed default tenant safely (no UI changes)
-try:
-    engine.ensure_seed_files(tenant_code="default", tenant_name="Default")
-except TypeError:
-    engine.ensure_seed_files()
+# ✅ MULTI-TENANT: seed default tenant safely (run once per session for speed)
+if "bootstrapped" not in st.session_state:
+    try:
+        engine.ensure_seed_files(tenant_code="default", tenant_name="Default")
+    except TypeError:
+        engine.ensure_seed_files()
+    st.session_state["bootstrapped"] = True
 
 # ============================================================
 # Checklist catalog seeding (safe, additive only)
@@ -709,7 +711,9 @@ def ensure_checklist_seed_data():
         _save_json_file(path, catalog)
 
 
-ensure_checklist_seed_data()
+if "checklist_seeded" not in st.session_state:
+    ensure_checklist_seed_data()
+    st.session_state["checklist_seeded"] = True
 
 # ============================================================
 # ✅ MULTI-TENANT helpers (added only, UI stays same)
@@ -738,6 +742,57 @@ def _engine_call(func_name: str, *args, **kwargs):
     except Exception:
         pass
     return fn(*args, **kwargs)
+
+# ============================================================
+# Performance: cache high-frequency read calls to Supabase/Postgres
+# Streamlit reruns the script on every interaction; caching avoids repeated network round-trips.
+# ============================================================
+@st.cache_data(ttl=30)
+def _cached_list_audits(tenant_id: Optional[str]):
+    return engine.list_audits(tenant_id=tenant_id) if hasattr(engine, "list_audits") else _engine_call("list_audits")
+
+@st.cache_data(ttl=30)
+def _cached_list_audit_calendar(tenant_id: Optional[str]):
+    # calendar audits are tenant-scoped in engine
+    try:
+        return _engine_call("list_audit_calendar", tenant_id=tenant_id)
+    except TypeError:
+        return _engine_call("list_audit_calendar")
+
+@st.cache_data(ttl=60)
+def _cached_departments_catalog(tenant_id: Optional[str]):
+    return _engine_call("load_departments_catalog", tenant_id=tenant_id) or []
+
+@st.cache_data(ttl=60)
+def _cached_skills_catalog(tenant_id: Optional[str]):
+    return _engine_call("load_skills_catalog", tenant_id=tenant_id) or {}
+
+@st.cache_data(ttl=30)
+def _cached_people(tenant_id: Optional[str]):
+    return _cached_people(tenant_id) or []
+
+@st.cache_data(ttl=15)
+def _cached_state(tenant_id: Optional[str]):
+    return _cached_state(tenant_id) or {}
+
+@st.cache_data(ttl=60)
+def _cached_sections_for_dept(tenant_id: Optional[str], dept: str):
+    return _engine_call("get_sections_for_department", dept, tenant_id=tenant_id) or []
+
+@st.cache_data(ttl=60)
+def _cached_items_for_section(tenant_id: Optional[str], dept: str, section: str):
+    return _engine_call("get_items_for_department_section", dept, section, tenant_id=tenant_id) or []
+
+@st.cache_data(ttl=20)
+def _cached_timetable_schedule():
+    if not _HAS_TIMETABLE or timetable is None:
+        return {"days": {}}
+    return timetable.load_schedule() or {"days": {}}
+
+def _clear_caches_and_rerun():
+    # Call after any write action (add/update/delete) so UI refreshes immediately.
+    st.cache_data.clear()
+    _rerun()
 
 
 def logout():
@@ -774,7 +829,7 @@ def show_auditor_timetable_reminder(auditor_name: str, remind_within_minutes: in
     now = datetime.now(tz) if tz else datetime.now()
     today = now.date().isoformat()
 
-    schedule = timetable.load_schedule()
+    schedule = _cached_timetable_schedule()
     day = schedule.get("days", {}).get(today, {})
 
     my_today = []
@@ -831,11 +886,13 @@ def show_auditor_timetable_reminder(auditor_name: str, remind_within_minutes: in
 # Helpers: persistent dropdown options
 # ============================================================
 def get_department_options_with_other() -> List[str]:
-    return _engine_call("load_departments_catalog") + ["Other"]
+    tenant_id = _current_tenant_id()
+    return _cached_departments_catalog(tenant_id) + ["Other"]
 
 
 def get_skill_catalog() -> Dict[str, str]:
-    return _engine_call("load_skills_catalog")
+    tenant_id = _current_tenant_id()
+    return _cached_skills_catalog(tenant_id)
 
 
 def _get_checklist_catalog_depts() -> List[str]:
@@ -1093,7 +1150,7 @@ def page_audit_calendar():
     with f4:
         q = st.text_input("Search", placeholder="Type to filter by title, scope, or owner", key="cal_search")
 
-    cal = _engine_call("list_audit_calendar") or []
+    cal = _cached_list_audit_calendar(tenant_id) or []
 
     # ---------- Normalize + filter ----------
     def _safe_date(s, default="1900-01-01"):
@@ -1273,7 +1330,7 @@ def page_audit_plan():
     tenant_id = st.session_state.auth.get("tenant_id")
     username = st.session_state.auth.get("username", "")
 
-    cal = _engine_call("list_audit_calendar") or []
+    cal = _cached_list_audit_calendar(tenant_id) or []
     if not cal:
         st.info("No audits found in Audit Calender. Create an audit first.")
         return
@@ -1332,8 +1389,8 @@ def page_audit_plan():
     dept_list = _engine_call("list_departments_simple", tenant_id) or []
     dept_options = [""] + [d for d in dept_list if d]
 
-    people = _engine_call("load_people", tenant_id=tenant_id) or []
-    state = _engine_call("load_state", tenant_id=tenant_id) or {}
+    people = _cached_people(tenant_id) or []
+    state = _cached_state(tenant_id) or {}
     schedule = timetable.load_schedule() if _HAS_TIMETABLE and timetable is not None else {"days": {}}
 
     def _norm(s: str) -> str:
@@ -1491,7 +1548,8 @@ render_topbar(username=username, role=role)
 if role == "auditor" and person_name and _HAS_TIMETABLE:
     show_auditor_timetable_reminder(person_name, remind_within_minutes=30)
 
-all_audits = _engine_call("list_audits")
+tenant_id = st.session_state.auth.get("tenant_id")
+all_audits = _cached_list_audits(tenant_id)
 my_audits = [a for a in all_audits if a.get("assigned_auditor") == person_name] if role == "auditor" else []
 
 
@@ -1590,8 +1648,8 @@ def page_admin_dashboard():
     render_panel("Auditor Availability", "FREE or BUSY based on active audit assignments.")
     st.write("")
 
-    people = _engine_call("load_people")
-    state = _engine_call("load_state")
+    people = _cached_people(tenant_id)
+    state = _cached_state(tenant_id)
     skill_cat = get_skill_catalog()
 
     rows = []
@@ -1612,7 +1670,7 @@ def page_admin_dashboard():
     # ----------------------------
     # Scheduled Audits (from Audit Calender)
     # ----------------------------
-    cal = _engine_call("list_audit_calendar") or []
+    cal = _cached_list_audit_calendar(tenant_id) or []
     if cal:
         st.subheader("Scheduled Audits")
         st.dataframe(
@@ -1731,7 +1789,7 @@ def page_admin_auditors_skills():
                 )
                 if ok:
                     st.success(msg)
-                    st.rerun()
+                    _clear_caches_and_rerun()
                 else:
                     st.error(msg)
 
@@ -1740,7 +1798,7 @@ def page_admin_auditors_skills():
         st.write("")
 
         people_raw = _engine_call("list_people_records")
-        state = _engine_call("load_state")
+        state = _cached_state(tenant_id)
         skill_cat = get_skill_catalog()
 
         rows = []
@@ -1766,7 +1824,7 @@ def page_admin_auditors_skills():
             ok, msg = _engine_call("delete_auditor", delete_name)
             if ok:
                 st.success(msg)
-                st.rerun()
+                _clear_caches_and_rerun()
             else:
                 st.error(msg)
 
@@ -1795,7 +1853,7 @@ def page_admin_checklist():
     render_panel("Checklist Library", f"Department: {dept_for_checklist}")
     st.write("")
 
-    sections = _engine_call("get_sections_for_department", dept_for_checklist)
+    sections = _cached_sections_for_dept(_current_tenant_id(), dept_for_checklist)
     pick_section = st.selectbox("Section", ["(Create New)"] + sections, key=f"chk_admin_section_{dept_for_checklist}")
 
     new_section = ""
@@ -1804,7 +1862,7 @@ def page_admin_checklist():
 
     section_name = new_section if pick_section == "(Create New)" else pick_section
 
-    existing_items = _engine_call("get_items_for_department_section", dept_for_checklist, section_name) if section_name else []
+    existing_items = _cached_items_for_section(_current_tenant_id(), dept_for_checklist, section_name) if section_name else []
     st.write("Edit checklist items below. One row = one checklist point.")
 
     df_items = pd.DataFrame({"Checklist": existing_items if existing_items else [""]})
@@ -1884,7 +1942,7 @@ def page_auditor_checklist():
         _engine_call("set_audit_status", audit_id, "In Progress")
         audit = _engine_call("get_audit", audit_id)
 
-    sections = _engine_call("get_sections_for_department", dept)
+    sections = _cached_sections_for_dept(_current_tenant_id(), dept)
     if not sections:
         st.info(f"No checklist sections found for department '{dept}'. Ask admin to create sections in Admin → Checklist.")
         st.stop()
@@ -1932,7 +1990,7 @@ def page_auditor_checklist():
                 )
                 if ok:
                     st.success(msg)
-                    st.rerun()
+                    _clear_caches_and_rerun()
                 else:
                     st.error(msg)
 
@@ -2170,9 +2228,9 @@ def page_audit_details():
             )
             if ok:
                 st.success(msg)
-                st.rerun()
+                _clear_caches_and_rerun()
             else:
-                st.error(msg)
+                    st.error(msg)
 
         st.markdown("#### 2) Submit Report (mandatory before completing)")
         checklist_ok, checklist_msg = _engine_call("validate_audit_checklists_complete", audit["audit_id"])
@@ -2185,18 +2243,18 @@ def page_audit_details():
             ok, msg = _engine_call("submit_report", audit["audit_id"], person_name)
             if ok:
                 st.success(msg)
-                st.rerun()
+                _clear_caches_and_rerun()
             else:
-                st.error(msg)
+                    st.error(msg)
 
         st.markdown("#### 3) Complete Audit (blocked without submission)")
         if st.button("Complete Audit", disabled=(not can_submit), key=f"ad_btn_complete_{audit.get('audit_id')}"):
             ok, msg = _engine_call("complete_audit", audit["audit_id"], person_name)
             if ok:
                 st.success(msg)
-                st.rerun()
+                _clear_caches_and_rerun()
             else:
-                st.error(msg)
+                    st.error(msg)
 
     # ----------------------------
     # Admin Controls
@@ -2215,9 +2273,9 @@ def page_audit_details():
             ok, msg = _engine_call("set_audit_status", audit["audit_id"], new_status)
             if ok:
                 st.success(msg)
-                st.rerun()
+                _clear_caches_and_rerun()
             else:
-                st.error(msg)
+                    st.error(msg)
 
 
     # ============================================================
@@ -2409,7 +2467,7 @@ def page_auditor_my_timetable():
     start_date = st.date_input("From", value=date.today(), key="mytt_from")
     days = st.number_input("Number of days", min_value=1, max_value=60, value=7, step=1, key="mytt_days")
 
-    schedule = timetable.load_schedule()
+    schedule = _cached_timetable_schedule()
     days_map = schedule.get("days", {})
 
     rows = []
@@ -2499,7 +2557,7 @@ if role == "admin":
         page_admin_auditors_skills()
     elif page == "Checklist":
         tenant_id = (st.session_state.get("auth") or {}).get("tenant_id")
-        depts = _engine_call("load_departments_catalog", tenant_id=tenant_id) or []
+        depts = _cached_departments_catalog(tenant_id) or []
         depts = [d for d in depts if str(d).strip()]
         depts = sorted(set(depts), key=lambda x: str(x).lower())
 
@@ -2518,10 +2576,7 @@ if role == "admin":
                     else:
                         _engine_call("add_department_to_catalog", new_dept, tenant_id=tenant_id)
                         st.success(f"Added department: {new_dept}")
-                        try:
-                            st.rerun()
-                        except Exception:
-                            st.experimental_rerun()
+                        _clear_caches_and_rerun()
                 st.stop()
 
             checklist_department = choice
