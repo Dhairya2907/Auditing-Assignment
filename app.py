@@ -747,11 +747,11 @@ def _engine_call(func_name: str, *args, **kwargs):
 # Performance: cache high-frequency read calls to Supabase/Postgres
 # Streamlit reruns the script on every interaction; caching avoids repeated network round-trips.
 # ============================================================
-@st.cache_data(ttl=30)
+@st.cache_data(show_spinner=False, ttl=60)
 def _cached_list_audits(tenant_id: Optional[str]):
     return engine.list_audits(tenant_id=tenant_id) if hasattr(engine, "list_audits") else _engine_call("list_audits")
 
-@st.cache_data(ttl=30)
+@st.cache_data(show_spinner=False, ttl=60)
 def _cached_list_audit_calendar(tenant_id: Optional[str]):
     # calendar audits are tenant-scoped in engine
     try:
@@ -759,31 +759,31 @@ def _cached_list_audit_calendar(tenant_id: Optional[str]):
     except TypeError:
         return _engine_call("list_audit_calendar")
 
-@st.cache_data(ttl=60)
+@st.cache_data(show_spinner=False, ttl=60)
 def _cached_departments_catalog(tenant_id: Optional[str]):
     return _engine_call("load_departments_catalog", tenant_id=tenant_id) or []
 
-@st.cache_data(ttl=60)
+@st.cache_data(show_spinner=False, ttl=60)
 def _cached_skills_catalog(tenant_id: Optional[str]):
     return _engine_call("load_skills_catalog", tenant_id=tenant_id) or {}
 
-@st.cache_data(ttl=30)
+@st.cache_data(show_spinner=False, ttl=60)
 def _cached_people(tenant_id: Optional[str]):
     return _engine_call("list_people_records", tenant_id=tenant_id) or []
 
-@st.cache_data(ttl=15)
+@st.cache_data(show_spinner=False, ttl=60)
 def _cached_state(tenant_id: Optional[str]):
     return _engine_call("load_state", tenant_id=tenant_id) or {}
 
-@st.cache_data(ttl=60)
+@st.cache_data(show_spinner=False, ttl=60)
 def _cached_sections_for_dept(tenant_id: Optional[str], dept: str):
     return _engine_call("get_sections_for_department", dept, tenant_id=tenant_id) or []
 
-@st.cache_data(ttl=60)
+@st.cache_data(show_spinner=False, ttl=60)
 def _cached_items_for_section(tenant_id: Optional[str], dept: str, section: str):
     return _engine_call("get_items_for_department_section", dept, section, tenant_id=tenant_id) or []
 
-@st.cache_data(ttl=20)
+@st.cache_data(show_spinner=False, ttl=60)
 def _cached_timetable_schedule():
     if not _HAS_TIMETABLE or timetable is None:
         return {"days": {}}
