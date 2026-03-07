@@ -396,43 +396,11 @@ import pandas as _pd
 # ── Audit Calendar page ───────────────────────────────────────────────────────
 def page_audit_calendar():
     st.title("Audit Calendar")
-    st.caption("Create audits and view them in a clean monthly calendar.")
+    st.caption("Plan the full year in a compact calendar. Create recurring audits using year, start month, frequency, and auto-calculated occurrences.")
+
     tenant_id = st.session_state.auth.get("tenant_id")
     username = st.session_state.auth.get("username", "")
-
-    st.markdown("""<style>.cal-wrap{background:#ffffff;border:1px solid #e5e7eb;border-radius:18px;padding:14px 14px 10px 14px;box-shadow:0 10px 24px rgba(15,23,42,0.06)}.cal-head{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:6px 6px 12px 6px}.cal-title{font-weight:900;color:#0f172a;font-size:16px;letter-spacing:0.2px}.cal-sub{color:#64748b;font-size:12px;margin-top:2px}.cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:10px;padding:8px 6px 8px 6px}.cal-dow{color:#64748b;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.08em;padding:6px 10px;border-radius:12px;background:#f8fafc;border:1px solid #e5e7eb;text-align:center}.cal-cell{border:1px solid #e5e7eb;border-radius:16px;padding:10px;min-height:92px;background:#ffffff;box-shadow:0 6px 14px rgba(15,23,42,0.04)}.cal-cell.muted{background:#fbfdff;border-style:dashed;opacity:0.7}.cal-day{display:flex;align-items:center;justify-content:space-between;margin-bottom:8px}.cal-num{font-weight:900;color:#0f172a;font-size:13px}.cal-badge{font-size:11px;font-weight:800;padding:4px 8px;border-radius:999px;border:1px solid #e5e7eb;background:#f8fafc;color:#334155}.cal-chip{display:block;padding:6px 8px;border-radius:12px;margin-top:6px;font-size:12px;font-weight:750;line-height:1.15;border:1px solid #e2e8f0;background:linear-gradient(180deg,#ffffff 0%,#f8fafc 100%);color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.cal-chip small{display:block;font-weight:700;color:#64748b;margin-top:2px}.cal-chip.planned{border-color:#bfdbfe;background:linear-gradient(180deg,#eff6ff 0%,#ffffff 100%)}.cal-chip.progress{border-color:#fde68a;background:linear-gradient(180deg,#fffbeb 0%,#ffffff 100%)}.cal-chip.closed{border-color:#bbf7d0;background:linear-gradient(180deg,#ecfdf5 0%,#ffffff 100%)}.cal-chip.other{border-color:#e5e7eb}.cal-more{color:#64748b;font-size:12px;margin-top:8px;font-weight:700}.cal-legend{display:flex;gap:8px;flex-wrap:wrap;padding:0 6px 10px 6px}.cal-dot{width:10px;height:10px;border-radius:999px;display:inline-block;margin-right:6px}.cal-pill{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;border:1px solid #e5e7eb;background:#ffffff;color:#334155;font-size:12px;font-weight:750}</style>""", unsafe_allow_html=True)
-
-    with st.expander("Create a calendar audit", expanded=False):
-        with st.form("create_calendar_audit_form"):
-            c1, c2, c3 = st.columns([1, 1, 2])
-            start = c1.date_input("Start date *", value=None, key="cal_start")
-            end = c2.date_input("End date *", value=None, key="cal_end")
-            title = c3.text_input("Audit title *", key="cal_title")
-            scope = st.text_area("Scope *", height=90, key="cal_scope")
-            if st.form_submit_button("Create audit", use_container_width=True):
-                if start is None or end is None:
-                    st.error("Start date and end date are required.")
-                elif not str(title).strip():
-                    st.error("Audit title is required.")
-                elif not str(scope).strip():
-                    st.error("Scope is required.")
-                elif end < start:
-                    st.error("End date cannot be before start date.")
-                else:
-                    audit, msg = _engine_call("create_audit_calendar", title=str(title).strip(), scope=str(scope).strip(), start_date=start.isoformat(), end_date=end.isoformat(), created_by=username)
-                    if audit:
-                        st.success(msg); _rerun()
-                    else:
-                        st.error(msg)
-
     today = date.today()
-    f1, f2, f3, f4 = st.columns([1, 1, 1, 2])
-    year = f1.selectbox("Year", list(range(today.year - 2, today.year + 6)), index=2, key="cal_year")
-    month = f2.selectbox("Month", list(range(1, 13)), index=today.month - 1, format_func=lambda m: _calendar.month_name[m], key="cal_month")
-    view = f3.selectbox("View", ["Calendar", "List"], index=0, key="cal_view")
-    q = f4.text_input("Search", placeholder="Type to filter by title, scope, or owner", key="cal_search")
-
-    cal = _cached_list_audit_calendar(tenant_id) or []
 
     def _safe_date(s, default="1900-01-01"):
         try:
@@ -440,207 +408,663 @@ def page_audit_calendar():
         except Exception:
             return date.fromisoformat(default)
 
+    def _add_months(d: date, months: int) -> date:
+        y = d.year + (d.month - 1 + months) // 12
+        mth = (d.month - 1 + months) % 12 + 1
+        last = _calendar.monthrange(y, mth)[1]
+        return date(y, mth, min(d.day, last))
+
     def _status_bucket(a):
         s = str(a.get("status", "")).strip().lower()
-        if s in ("planned", "open", "assigned", "scheduled"):
+        if s in {"planned", "open", "assigned", "scheduled", "created"}:
             return "planned"
-        if s in ("in progress", "in-progress", "progress", "ongoing", "active"):
+        if s in {"in progress", "in-progress", "progress", "ongoing", "active"}:
             return "progress"
-        if s in ("closed", "done", "complete", "completed"):
+        if s in {"closed", "done", "complete", "completed"}:
             return "closed"
         return "other"
 
-    def _matches(a):
-        if not q:
-            return True
-        blob = " ".join(str(a.get(k, "")) for k in ["title", "scope", "created_by", "auditor", "owner"]).lower()
-        return q.lower() in blob
+    def _freq_step_and_count(freq: str, start_month: int) -> tuple[int, int]:
+        mapping = {
+            "Monthly": 1,
+            "Bi-monthly": 2,
+            "Quarterly": 3,
+            "Half-yearly": 6,
+        }
+        step = mapping.get(freq, 1)
+        count = len(list(range(int(start_month), 13, step)))
+        return step, count
 
-    month_start = date(year, month, 1)
-    month_end = date(year, month, _calendar.monthrange(year, month)[1])
+    # ── CSS: styled exactly like the wall-calendar image ─────────────────────
+    st.markdown("""<style>
+    .yc-outer{
+        border:3px solid #1a3a8f;
+        border-radius:4px;
+        background:#fff;
+        overflow:hidden;
+        margin-top:8px;
+    }
+    .yc-year-banner{
+        text-align:center;
+        font-size:36px;
+        font-weight:900;
+        color:#0f172a;
+        padding:10px 0 8px 0;
+        border-bottom:3px solid #1a3a8f;
+        background:#fff;
+        letter-spacing:1px;
+    }
+    .yc-grid{
+        display:grid;
+        grid-template-columns:repeat(4,minmax(0,1fr));
+        gap:0;
+        background:#1a3a8f;
+    }
+    .yc-month{
+        background:#fff;
+        border-right:2px solid #1a3a8f;
+        border-bottom:2px solid #1a3a8f;
+        padding:6px 4px 8px 4px;
+    }
+    .yc-month:nth-child(4n){border-right:none;}
+    .yc-month:nth-last-child(-n+4){border-bottom:none;}
+    .yc-month-name{
+        text-align:center;
+        font-size:15px;
+        font-weight:900;
+        color:#0f172a;
+        padding:2px 0 4px 0;
+        letter-spacing:0.3px;
+    }
+    .yc-weekdays{
+        display:grid;
+        grid-template-columns:repeat(7,1fr);
+    }
+    .yc-weekday{
+        text-align:center;
+        font-size:10px;
+        font-weight:800;
+        color:#0f172a;
+        padding:1px 0 3px 0;
+    }
+    .yc-days{
+        display:grid;
+        grid-template-columns:repeat(7,1fr);
+    }
+    .yc-day{
+        text-align:center;
+        font-size:11px;
+        font-weight:600;
+        color:#0f172a;
+        padding:2px 1px;
+        min-height:18px;
+        line-height:16px;
+    }
+    .yc-day.muted{color:#fff;}
+    .yc-day.today{
+        background:#0f172a;
+        color:#fff !important;
+        border-radius:50%;
+        font-weight:900;
+    }
+    .yc-day.has-audit{
+        background:#dbeafe;
+        color:#1e3a8a;
+        font-weight:800;
+        border-radius:3px;
+    }
+    .yc-day.start-audit{
+        background:#2563eb;
+        color:#fff !important;
+        font-weight:900;
+        border-radius:3px;
+    }
+    .yc-day.end-audit{
+        background:#16a34a;
+        color:#fff !important;
+        font-weight:900;
+        border-radius:3px;
+    }
+    .yc-legend{
+        display:flex;gap:14px;flex-wrap:wrap;
+        margin:8px 0 10px 0;
+        align-items:center;
+    }
+    .yc-pill{
+        display:inline-flex;align-items:center;gap:6px;
+        padding:5px 10px;border-radius:999px;
+        border:1px solid #e5e7eb;background:#fff;
+        color:#334155;font-size:12px;font-weight:600;
+    }
+    .yc-pill i{
+        display:inline-block;width:10px;height:10px;border-radius:50%;
+    }
+    @media (max-width:1100px){
+        .yc-grid{grid-template-columns:repeat(3,minmax(0,1fr));}
+        .yc-month:nth-child(4n){border-right:2px solid #1a3a8f;}
+        .yc-month:nth-child(3n){border-right:none;}
+        .yc-month:nth-last-child(-n+4){border-bottom:2px solid #1a3a8f;}
+        .yc-month:nth-last-child(-n+3){border-bottom:none;}
+    }
+    @media (max-width:800px){
+        .yc-grid{grid-template-columns:repeat(2,minmax(0,1fr));}
+        .yc-month:nth-child(3n){border-right:2px solid #1a3a8f;}
+        .yc-month:nth-child(2n){border-right:none;}
+        .yc-month:nth-last-child(-n+3){border-bottom:2px solid #1a3a8f;}
+        .yc-month:nth-last-child(-n+2){border-bottom:none;}
+    }
+    </style>""", unsafe_allow_html=True)
+
+    # ── Create form ───────────────────────────────────────────────────────────
+    st.markdown("""<style>
+    div[data-testid="stExpander"]{
+        border:1px solid #e2e8f0 !important;
+        border-radius:12px !important;
+        background:#ffffff !important;
+        box-shadow:0 2px 8px rgba(15,23,42,0.05) !important;
+    }
+    div[data-testid="stExpander"] label p{
+        font-size:13px !important;
+        font-weight:700 !important;
+        color:#374151 !important;
+    }
+    div[data-testid="stExpander"] button[kind="primaryFormSubmit"],
+    div[data-testid="stExpander"] button[data-testid="baseButton-primaryFormSubmit"]{
+        background:#4f46e5 !important;
+        color:#ffffff !important;
+        font-size:15px !important;
+        font-weight:700 !important;
+        border:none !important;
+        border-radius:8px !important;
+    }
+    div[data-testid="stExpander"] button[kind="primaryFormSubmit"]:hover{
+        background:#4338ca !important;
+    }
+    </style>""", unsafe_allow_html=True)
+
+    year_list = list(range(today.year - 2, today.year + 10))
+
+    with st.expander("➕ Create Audit Calendar", expanded=False):
+
+        # Year | Start Month | Frequency — OUTSIDE form so they update live
+        c1, c2, c3 = st.columns([1, 1.2, 1.2])
+        audit_year  = c1.selectbox("Audit Year *",
+            options=year_list,
+            index=year_list.index(today.year),
+            key="yc_audit_year")
+        start_month = c2.selectbox("Audit Start Month *",
+            options=list(range(1, 13)),
+            format_func=lambda m: _calendar.month_name[m],
+            key="yc_start_month")
+        frequency   = c3.selectbox("Audit Frequency *",
+            options=["Monthly", "Bi-monthly", "Quarterly", "Half-yearly"],
+            index=2, key="yc_frequency")
+
+        # Live occurrence calculation — updates instantly on every change
+        step_months, auto_occ = _freq_step_and_count(str(frequency), int(start_month))
+        occ_months = list(range(int(start_month), 13, step_months))
+        occ_names  = ", ".join(_calendar.month_abbr[m] for m in occ_months)
+
+        oc1, oc2 = st.columns([1, 3])
+        oc1.metric("Audit Occurrence (auto)", auto_occ)
+        oc2.info(f"**{auto_occ} audit(s) will be created** for: {occ_names}", icon="📌")
+
+        # Title, Scope and Submit — inside form
+        with st.form("create_calendar_audit_form"):
+            title = st.text_input("Audit Title *",
+                placeholder="e.g. BMR Compliance Audit", key="yc_title")
+            scope = st.text_area("Audit Scope *",
+                placeholder="e.g. QA – Batch Records", height=90, key="yc_scope")
+
+            if st.form_submit_button("🗓  Create Audit Calendar",
+                    use_container_width=True, type="primary"):
+                if not str(title).strip():
+                    st.error("Audit title is required.")
+                elif not str(scope).strip():
+                    st.error("Scope is required.")
+                else:
+                    occurrences = int(auto_occ)
+                    first_date  = date(int(audit_year), int(start_month), 1)
+                    created     = 0
+                    last_msg    = ""
+
+                    for i in range(occurrences):
+                        sd = _add_months(first_date, step_months * i)
+                        ed = sd
+                        audit, msg = _engine_call(
+                            "create_audit_calendar",
+                            title=str(title).strip(),
+                            scope=str(scope).strip(),
+                            start_date=sd.isoformat(),
+                            end_date=ed.isoformat(),
+                            created_by=username,
+                        )
+                        last_msg = msg
+                        if audit:
+                            created += 1
+
+                    if created == occurrences:
+                        st.success(f"✅ Created {created} audit(s) for {int(audit_year)}.")
+                        _rerun()
+                    elif created > 0:
+                        st.warning(f"Created {created}/{occurrences} audit(s). {last_msg}")
+                        _rerun()
+                    else:
+                        st.error(last_msg or "Failed to create audits.")
+
+    # ── View controls ─────────────────────────────────────────────────────────
+    c1, c2 = st.columns([1, 3])
+    selected_year = c1.selectbox("Select Year",
+        options=year_list,
+        index=year_list.index(today.year),
+        key="yc_view_year")
+    search_q = c2.text_input("Search", placeholder="Filter by title, scope, or owner", key="yc_search")
+
+    cal = _cached_list_audit_calendar(tenant_id) or []
+    year_start = date(int(selected_year), 1, 1)
+    year_end   = date(int(selected_year), 12, 31)
+
     items = []
     for a in cal:
         sd, ed = _safe_date(a.get("start_date")), _safe_date(a.get("end_date"))
         if ed < sd:
             sd, ed = ed, sd
-        if ed < month_start or sd > month_end or not _matches(a):
+        if ed < year_start or sd > year_end:
+            continue
+        blob = " ".join(str(a.get(k, "")) for k in ["title", "scope", "created_by", "auditor", "owner"]).lower()
+        if search_q and search_q.lower() not in blob:
             continue
         items.append({**a, "_sd": sd, "_ed": ed, "_bucket": _status_bucket(a)})
 
-    st.markdown("""<div class="cal-legend"><span class="cal-pill"><span class="cal-dot" style="background:#93c5fd"></span>Planned</span><span class="cal-pill"><span class="cal-dot" style="background:#fbbf24"></span>In progress</span><span class="cal-pill"><span class="cal-dot" style="background:#34d399"></span>Closed</span><span class="cal-pill"><span class="cal-dot" style="background:#cbd5e1"></span>Other</span></div>""", unsafe_allow_html=True)
-
-    if view == "List":
-        if not items:
-            st.info("No audits found for this month.")
-            return
-        for a in sorted(items, key=lambda x: (x["_sd"], x.get("title", ""))):
-            sd, ed = a["_sd"], a["_ed"]
-            title = str(a.get("title", "Untitled")).strip() or "Untitled"
-            scope = str(a.get("scope", "")).strip()
-            owner = str(a.get("created_by", "")).strip() or str(a.get("auditor", "")).strip()
-            st.markdown(
-                f"""<div class="cal-wrap" style="margin-bottom:10px;"><div class="cal-head"><div><div class="cal-title">{title}</div><div class="cal-sub">{sd.strftime('%d %b %Y')} → {ed.strftime('%d %b %Y')} • Owner: {owner or '—'}</div></div><div class="cal-badge">{str(a.get('status','Planned')).strip() or 'Planned'}</div></div><div style="padding:0 6px 6px 6px; color:#334155; font-size:13px;">{scope if scope else "<span style='color:#94a3b8;'>No scope provided.</span>"}</div></div>""",
-                unsafe_allow_html=True,
-            )
-        return
-
-    _, days_in_month = _calendar.monthrange(year, month)
-    offset = date(year, month, 1).weekday()
-    rows = (offset + days_in_month + 6) // 7
-
-    by_day: dict = {}
+    # build day map
+    month_day_map = {m: {} for m in range(1, 13)}
     for a in items:
-        d = max(a["_sd"], month_start)
-        last = min(a["_ed"], date(year, month, days_in_month))
-        while d <= last:
-            by_day.setdefault(d, []).append(a)
-            d += timedelta(days=1)
+        cur  = max(a["_sd"], year_start)
+        last = min(a["_ed"], year_end)
+        while cur <= last:
+            month_day_map[cur.month].setdefault(cur.day, []).append(a)
+            cur += timedelta(days=1)
 
-    dow = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
-    st.markdown(f"<div class='cal-wrap'>", unsafe_allow_html=True)
-    st.markdown(f"""<div class="cal-head"><div><div class="cal-title">{_calendar.month_name[month]} {year}</div><div class="cal-sub">Showing {len(items)} audit(s) in this month</div></div><div class="cal-badge">{tenant_id or "Tenant"}</div></div>""", unsafe_allow_html=True)
-    st.markdown("<div class='cal-grid'>" + "".join(f"<div class='cal-dow'>{d}</div>" for d in dow) + "</div>", unsafe_allow_html=True)
+    # ── Legend ────────────────────────────────────────────────────────────────
+    st.markdown(
+        '<div class="yc-legend">'
+        '<span class="yc-pill"><i style="background:#2563eb"></i>Audit start</span>'
+        '<span class="yc-pill"><i style="background:#16a34a"></i>Audit end</span>'
+        '<span class="yc-pill"><i style="background:#dbeafe;border:1px solid #93c5fd"></i>Audit day</span>'
+        '<span class="yc-pill"><i style="background:#0f172a"></i>Today</span>'
+        f'<span style="font-size:12px;color:#64748b;font-weight:600;margin-left:6px;">{len(items)} audit(s) in {int(selected_year)}</span>'
+        '</div>',
+        unsafe_allow_html=True)
 
-    cells_html = ["<div class='cal-grid'>"]
-    day_num = 1
-    for r in range(rows):
-        for c in range(7):
-            ci = r * 7 + c
-            if ci < offset or day_num > days_in_month:
-                cells_html.append("<div class='cal-cell muted'></div>")
-                continue
-            d = date(year, month, day_num); day_num += 1
-            badge = "<span class='cal-badge'>Today</span>" if d == today else ""
-            audits_day = sorted(by_day.get(d, []), key=lambda x: (x["_sd"], str(x.get("title", ""))))
-            max_show = 3
-            chips = []
-            for a in audits_day[:max_show]:
-                t = (str(a.get("title", "Untitled")).strip() or "Untitled")
-                sd, ed = a["_sd"], a["_ed"]
-                tag = "Single day" if sd == ed else (f"Starts • {sd.strftime('%d %b')} → {ed.strftime('%d %b')}" if d == sd else (f"Ends • {sd.strftime('%d %b')} → {ed.strftime('%d %b')}" if d == ed else f"Ongoing • {sd.strftime('%d %b')} → {ed.strftime('%d %b')}"))
-                scope = str(a.get("scope", "")).strip()
-                tooltip = (t + (" | " + scope if scope else "")).replace('"', "&quot;")
-                chips.append(f"<span class='cal-chip {a['_bucket']}' title=\"{tooltip}\">{t}<small>{tag}</small></span>")
-            more = f"<div class='cal-more'>+{len(audits_day) - max_show} more</div>" if len(audits_day) > max_show else ""
-            cells_html.append(f"<div class='cal-cell'><div class='cal-day'><span class='cal-num'>{d.day}</span>{badge}</div>{''.join(chips)}{more}</div>")
-    cells_html.append("</div>")
-    st.markdown("".join(cells_html), unsafe_allow_html=True)
-    st.markdown("</div>", unsafe_allow_html=True)
+    # ── Calendar: big year banner + 4×3 grid ─────────────────────────────────
+    weekdays = ["S", "M", "T", "W", "T", "F", "S"]
 
-# ── Audit Plan page ───────────────────────────────────────────────────────────
-def page_audit_plan():
-    st.title("Audit Plan")
-    st.caption("Select an audit from Audit Calender, then create a working-days schedule with 1-hour slots.")
-    tenant_id = st.session_state.auth.get("tenant_id")
-    username = st.session_state.auth.get("username", "")
+    months_html = ""
+    for month in range(1, 13):
+        # Sunday-first offset: Python weekday() is 0=Mon, so Sun=+1 mod 7
+        first_dow = (date(int(selected_year), month, 1).weekday() + 1) % 7
+        days_in_month = _calendar.monthrange(int(selected_year), month)[1]
 
-    cal = _cached_list_audit_calendar(tenant_id) or []
-    if not cal:
-        st.info("No audits found in Audit Calender. Create an audit first.")
-        return
+        wd_html = "".join(f'<div class="yc-weekday">{d}</div>' for d in weekdays)
 
-    by_label = {f"{a.get('title','')} ({a.get('start_date','')} -> {a.get('end_date','')})": a for a in cal}
-    sel_label = st.selectbox("Select Audit", options=list(by_label.keys()))
-    audit = by_label[sel_label]
-    calendar_audit_id = audit.get("id")
+        cells = ""
+        # blank cells before day 1
+        for _ in range(first_dow):
+            cells += '<div class="yc-day muted"></div>'
+
+        for day_num in range(1, days_in_month + 1):
+            audits_today = month_day_map.get(month, {}).get(day_num, [])
+            is_today = (int(selected_year) == today.year and month == today.month and day_num == today.day)
+
+            if is_today:
+                cls = "yc-day today"
+            elif audits_today:
+                is_start = any(a["_sd"].month == month and a["_sd"].day == day_num and a["_sd"].year == int(selected_year) for a in audits_today)
+                is_end   = any(a["_ed"].month == month and a["_ed"].day == day_num and a["_ed"].year == int(selected_year) for a in audits_today)
+                if is_start:
+                    cls = "yc-day start-audit"
+                elif is_end:
+                    cls = "yc-day end-audit"
+                else:
+                    cls = "yc-day has-audit"
+            else:
+                cls = "yc-day"
+
+            tooltip = ""
+            if audits_today:
+                names = [str(a.get("title", "Audit")).strip() or "Audit" for a in audits_today[:4]]
+                if len(audits_today) > 4:
+                    names.append(f"+{len(audits_today)-4} more")
+                tooltip = ' title="' + " | ".join(names).replace('"', "&quot;") + '"'  
+
+            cells += f'<div class="{cls}"{tooltip}>{day_num}</div>'
+
+        months_html += (
+            f'<div class="yc-month">'
+            f'<div class="yc-month-name">{_calendar.month_name[month]}</div>'
+            f'<div class="yc-weekdays">{wd_html}</div>'
+            f'<div class="yc-days">{cells}</div>'
+            f'</div>'
+        )
 
     st.markdown(
-        "<div style='padding:12px;border:1px solid #e5e7eb;border-radius:12px;background:#ffffff;'>"
-        + f"<div style='font-weight:800;color:#0f172a;'>{audit.get('title','')}</div>"
-        + f"<div style='color:#475569;font-size:13px;'>{audit.get('start_date','')} -> {audit.get('end_date','')}</div>"
-        + f"<div style='color:#0f172a;margin-top:6px;'><b>Scope:</b> {audit.get('scope','')}</div></div>",
-        unsafe_allow_html=True,
-    )
-    st.write("")
+        f'<div class="yc-outer">'
+        f'<div class="yc-year-banner">{int(selected_year)}</div>'
+        f'<div class="yc-grid">{months_html}</div>'
+        f'</div>',
+        unsafe_allow_html=True)
 
-    plan = _engine_call("get_audit_plan_by_calendar_audit", calendar_audit_id=calendar_audit_id)
-    with st.form("plan_create_form"):
-        days_default = int(plan["working_days"]) if plan and plan.get("working_days") else 1
-        days = st.number_input("How many working days will the audit run? *", min_value=1, step=1, value=days_default)
-        if st.form_submit_button("Create / Reset Plan"):
-            p, msg = _engine_call("create_or_reset_audit_plan", calendar_audit_id=calendar_audit_id, working_days=int(days), created_by=username)
+
+def page_audit_plan():
+    st.title("Audit Plan")
+    st.caption("Select an audit, set the start date and duration, configure time slots, then assign departments and auditors.")
+
+    tenant_id = st.session_state.auth.get("tenant_id")
+    username  = st.session_state.auth.get("username", "")
+    today     = date.today()
+
+    # ── CSS ───────────────────────────────────────────────────────────────────
+    st.markdown("""<style>
+    .ap-card{background:#fff;border:1px solid #e2e8f0;border-radius:12px;
+             padding:14px 16px;margin-bottom:12px;
+             box-shadow:0 2px 10px rgba(15,23,42,0.04);}
+    .ap-label{font-size:11px;font-weight:700;color:#64748b;
+              text-transform:uppercase;letter-spacing:.4px;margin-bottom:4px;}
+    .ap-value{font-size:14px;font-weight:700;color:#0f172a;}
+    .ap-meta {font-size:12px;color:#64748b;margin-top:2px;}
+    .day-head{background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;
+              padding:8px 14px;margin:18px 0 10px;
+              font-size:13px;font-weight:800;color:#0f172a;
+              display:flex;align-items:center;gap:10px;}
+    .slot-row{background:#fff;border:1px solid #e2e8f0;border-radius:8px;
+              padding:10px 14px;margin-bottom:8px;}
+    .slot-time{font-size:12px;font-weight:800;color:#3b82f6;
+               background:#eff6ff;border-radius:6px;padding:3px 8px;
+               display:inline-block;white-space:nowrap;}
+    /* ── fix multiselect tag: light bg, dark readable text ── */
+    span[data-baseweb="tag"]{
+        background:#e0f2fe !important;
+        border:1px solid #7dd3fc !important;
+        border-radius:6px !important;
+    }
+    span[data-baseweb="tag"] span{
+        color:#0c4a6e !important;
+        font-weight:600 !important;
+        font-size:12px !important;
+    }
+    span[data-baseweb="tag"] svg{
+        fill:#0369a1 !important;
+    }
+    </style>""", unsafe_allow_html=True)
+
+    # ════════════════════════════════════════════════════════════════════════
+    # STEP 1 — Select Audit
+    # ════════════════════════════════════════════════════════════════════════
+    cal = _cached_list_audit_calendar(tenant_id) or []
+    if not cal:
+        st.info("No audits found in Audit Calendar. Create an audit first.")
+        return
+
+    st.markdown("### Step 1 — Select Audit")
+    by_label = {
+        f"{a.get('title','')}  ({a.get('start_date','')} → {a.get('end_date','')})": a
+        for a in cal}
+    sel_label = st.selectbox("Audit", options=list(by_label.keys()), key="ap_sel_audit")
+    audit             = by_label[sel_label]
+    calendar_audit_id = audit.get("id")
+
+    # Show audit info card
+    st.markdown(
+        f'<div class="ap-card">'
+        f'<div class="ap-value">{audit.get("title","")}</div>'
+        f'<div class="ap-meta">'
+        f'{audit.get("start_date","")} → {audit.get("end_date","")}'
+        f'</div>'
+        f'<div style="font-size:12px;color:#475569;margin-top:5px;">'
+        f'<b>Scope:</b> {audit.get("scope","—")}'
+        f'</div></div>',
+        unsafe_allow_html=True)
+
+    st.divider()
+
+    # ════════════════════════════════════════════════════════════════════════
+    # STEP 2 — Configure Plan (duration → pick each day → time slots)
+    # ════════════════════════════════════════════════════════════════════════
+    st.markdown("### Step 2 — Configure Plan")
+
+    # default start from audit record
+    default_sd = today
+    try:    default_sd = date.fromisoformat(str(audit.get("start_date") or today))
+    except: pass
+
+    # Duration picker — drives how many date pickers appear
+    duration_days = st.number_input(
+        "Duration — how many days will this audit be conducted?",
+        min_value=1, max_value=30, value=1, step=1, key="ap_duration",
+        help="Set this first. One date picker per day will appear below.")
+
+    duration_days = int(duration_days)
+
+    # One date picker per audit day
+    st.markdown(f"**Select the date for each of the {duration_days} audit day(s):**")
+    st.caption("Days do not have to be consecutive — pick any dates that suit your schedule.")
+
+    audit_dates = []
+    date_cols = st.columns(min(duration_days, 4))   # max 4 per row
+    for i in range(duration_days):
+        col = date_cols[i % 4] if duration_days > 1 else st.columns([1, 3])[0]
+        # default: day i starts from default_sd + i calendar days
+        default_di = default_sd + timedelta(days=i)
+        picked = col.date_input(
+            f"Day {i+1}",
+            value=default_di,
+            key=f"ap_day_{i}_{calendar_audit_id}",
+            help=f"Choose the date for audit day {i+1}")
+        audit_dates.append(picked)
+
+    # Duplicate-date warning
+    unique_dates = list(dict.fromkeys(audit_dates))   # preserve order, remove dupes
+    if len(unique_dates) < len(audit_dates):
+        st.warning("⚠️ Some dates are the same. Duplicate dates will be merged into one day.")
+
+    # Time slots — admin configures which slots to include each day
+    st.markdown("**Time Slots** — select which time slots to include on each audit day")
+    ALL_SLOTS = [
+        ("09:00","10:00"), ("09:30","10:30"),
+        ("10:00","11:00"), ("10:30","11:30"),
+        ("11:00","12:00"), ("11:30","12:30"),
+        ("12:00","13:00"), ("12:30","13:30"),
+        ("13:00","14:00"), ("13:30","14:30"),
+        ("14:00","15:00"), ("14:30","15:30"),
+        ("15:00","16:00"), ("15:30","16:30"),
+        ("16:00","17:00"),
+    ]
+    slot_labels  = [f"{s0} – {s1}" for s0, s1 in ALL_SLOTS]
+    default_sel  = [f"{s0} – {s1}" for s0, s1 in [
+        ("09:30","10:30"),("10:30","11:30"),("11:30","12:30"),
+        ("12:30","13:30"),("13:30","14:30"),("14:30","15:30"),("15:30","16:30")]]
+    chosen_labels = st.multiselect(
+        "Time slots for each audit day",
+        options=slot_labels,
+        default=[l for l in default_sel if l in slot_labels],
+        key="ap_slots",
+        help="Each selected slot appears as one row per day in the schedule.")
+    chosen_slots = [ALL_SLOTS[slot_labels.index(l)] for l in chosen_labels if l in slot_labels]
+
+    # Live summary
+    if unique_dates and chosen_slots:
+        total_rows = len(unique_dates) * len(chosen_slots)
+        date_strs  = ", ".join(d.strftime("%d %b %Y") for d in sorted(unique_dates))
+        st.info(
+            f"📋 **{len(unique_dates)} day(s)** × **{len(chosen_slots)} slot(s)** "
+            f"= **{total_rows} total rows**\n\n"
+            f"Dates: {date_strs}",
+            icon="📌")
+
+    # Create / Reset Plan button
+    st.write("")
+    if st.button("🗓 Create / Reset Plan", type="primary", key="ap_create_plan"):
+        if not chosen_slots:
+            st.error("Please select at least one time slot.")
+        elif not unique_dates:
+            st.error("Please select at least one audit date.")
+        else:
+            p, msg = _engine_call(
+                "create_audit_plan_with_dates",
+                calendar_audit_id = calendar_audit_id,
+                audit_dates       = [d.isoformat() for d in unique_dates],
+                created_by        = username,
+                custom_slots      = chosen_slots)
             if p:
-                st.success(msg); _rerun()
+                st.success(f"✅ {msg}")
+                st.cache_data.clear()
+                _rerun()
             else:
                 st.error(msg)
 
-    plan = _engine_call("get_audit_plan_by_calendar_audit", calendar_audit_id=calendar_audit_id)
+    st.divider()
+
+    # ════════════════════════════════════════════════════════════════════════
+    # STEP 3 — Schedule: assign department + auditor + notes per slot
+    # ════════════════════════════════════════════════════════════════════════
+    plan = _engine_call(
+        "get_audit_plan_by_calendar_audit",
+        calendar_audit_id=calendar_audit_id)
+
     if not plan:
-        st.info("Create the audit plan to start scheduling.")
+        st.info("Use the form above to create the audit plan first.")
         return
+
     slots = plan.get("slots", []) or []
     if not slots:
-        st.warning("No plan slots found; reset the plan once.")
+        st.warning("No slots found — click 'Create / Reset Plan' to generate them.")
         return
 
-    dept_list = _engine_call("list_departments_simple", tenant_id) or []
+    st.markdown("### Step 3 — Assign Departments & Auditors")
+    st.caption("Rules: An auditor cannot audit their own department. Skills must match the department's required skills.")
+
+    # Load reference data
+    dept_list    = _engine_call("list_departments_simple", tenant_id) or []
     dept_options = [""] + [d for d in dept_list if d]
-    people = _cached_people(tenant_id) or []
-    state = _cached_state(tenant_id) or {}
-    schedule = (timetable.load_schedule() if _HAS_TIMETABLE and timetable else {}) or {"days": {}}
+    people       = _cached_people(tenant_id) or []
+    state        = _cached_state(tenant_id) or {}
 
-    def _norm(s):
-        return " ".join(str(s or "").strip().split()).lower()
+    def _norm(s): return " ".join(str(s or "").strip().split()).lower()
 
-    def eligible_auditors_for(department: str, date_str: str, slot_str: str) -> List[str]:
+    def eligible_auditors_for(department: str, date_str: str, slot_str: str) -> list:
         dep = (department or "").strip()
-        if not dep:
-            return []
+        if not dep: return []
         required = set(_engine_call("get_required_skills_for_dept", dep, tenant_id=tenant_id) or set())
         eligible = []
         for p in people:
-            p_name, p_dept, p_skills = getattr(p, "name", ""), getattr(p, "department", ""), set(getattr(p, "skills", set()) or set())
-            if _norm(p_dept) and _norm(p_dept) == _norm(dep):
-                continue
-            if required and not required.issubset(p_skills):
-                continue
-            if engine.is_busy(state, p_name):
-                continue
-            if _HAS_TIMETABLE and timetable and timetable.auditor_is_busy(schedule, date_str, slot_str, p_name):
-                continue
+            p_name  = getattr(p, "name", "")
+            p_dept  = getattr(p, "department", "")
+            p_skills= set(getattr(p, "skills", set()) or set())
+            # Rule 1: cannot audit own department
+            if _norm(p_dept) and _norm(p_dept) == _norm(dep): continue
+            # Rule 2: must have required skills
+            if required and not required.issubset(p_skills): continue
+            # Rule 3: must not be busy
+            if engine.is_busy(state, p_name): continue
             eligible.append(p_name)
         return sorted(set(x for x in eligible if x))
 
-    st.subheader("Plan schedule")
-    st.caption("Auditor dropdown follows rules: not same department, required skills match, not busy, no slot clash.")
-
-    ss_key = f"plan_edits_{plan.get('plan_id')}"
+    # Session state for edits
+    ss_key = f"ap_edits_{plan.get('plan_id')}"
     if ss_key not in st.session_state:
-        st.session_state[ss_key] = {s.get("id"): {"department": s.get("department") or "", "auditor_name": s.get("auditor_name") or "", "notes": s.get("notes") or ""} for s in slots}
+        st.session_state[ss_key] = {
+            s.get("id"): {
+                "department":   s.get("department") or "",
+                "auditor_name": s.get("auditor_name") or "",
+                "notes":        s.get("notes") or "",
+            } for s in slots}
     edits = st.session_state[ss_key]
 
-    for d in sorted({s.get("plan_date") for s in slots if s.get("plan_date")}):
-        st.markdown(f"### {d}")
-        for s in [s for s in slots if s.get("plan_date") == d]:
-            sid = s.get("id")
-            slot_str = f"{s.get('slot_start')}-{s.get('slot_end')}"
-            row = edits.get(sid, {"department": "", "auditor_name": "", "notes": ""})
-            c1, c2, c3, c4 = st.columns([2.2, 2.2, 2.2, 3.4])
-            c1.text_input("Slot", value=slot_str, key=f"slot_lbl_{sid}", disabled=True)
-            dept_val = c2.selectbox("Department", options=dept_options, index=dept_options.index(row.get("department", "")) if row.get("department", "") in dept_options else 0, key=f"slot_dept_{sid}")
-            auditor_options = [""] + eligible_auditors_for(dept_val, d, slot_str)
-            aud_val = c3.selectbox("Auditor", options=auditor_options, index=auditor_options.index(row.get("auditor_name", "")) if row.get("auditor_name", "") in auditor_options else 0, key=f"slot_aud_{sid}")
-            notes_val = c4.text_input("Notes", value=row.get("notes", ""), key=f"slot_notes_{sid}")
-            edits[sid] = {"department": dept_val or "", "auditor_name": aud_val or "", "notes": notes_val or ""}
-        st.divider()
+    # Render by day
+    grouped = {}
+    for s in slots:
+        grouped.setdefault(s.get("plan_date",""), []).append(s)
 
-    c1, c2 = st.columns(2)
-    if c1.button("Auto-assign missing auditors"):
+    for day_str in sorted(grouped.keys()):
+        try:    day_label = date.fromisoformat(day_str).strftime("%A, %d %b %Y")
+        except: day_label = day_str
+
+        st.markdown(
+            f'<div class="day-head">📅 {day_label}</div>',
+            unsafe_allow_html=True)
+
+        for s in grouped[day_str]:
+            sid      = s.get("id")
+            s0, s1   = s.get("slot_start",""), s.get("slot_end","")
+            slot_str = f"{s0}-{s1}"
+            row      = edits.get(sid, {"department":"","auditor_name":"","notes":""})
+
+            st.markdown(
+                f'<div style="margin-bottom:4px;">'
+                f'<span class="slot-time">🕐 {s0} – {s1}</span>'
+                f'</div>',
+                unsafe_allow_html=True)
+
+            col_dept, col_aud, col_notes = st.columns([2, 2, 3])
+
+            dept_val = col_dept.selectbox(
+                "Department",
+                options=dept_options,
+                index=dept_options.index(row["department"]) if row["department"] in dept_options else 0,
+                key=f"ap_dept_{sid}")
+
+            aud_opts = [""] + eligible_auditors_for(dept_val, day_str, slot_str)
+            cur_aud  = row["auditor_name"] if row["auditor_name"] in aud_opts else ""
+            aud_val  = col_aud.selectbox(
+                "Auditor",
+                options=aud_opts,
+                index=aud_opts.index(cur_aud) if cur_aud in aud_opts else 0,
+                key=f"ap_aud_{sid}",
+                help="Only auditors eligible for this department are shown.")
+
+            notes_val = col_notes.text_input(
+                "Notes",
+                value=row["notes"],
+                placeholder="Any specific instructions for this slot...",
+                key=f"ap_notes_{sid}")
+
+            edits[sid] = {
+                "department":   dept_val   or "",
+                "auditor_name": aud_val    or "",
+                "notes":        notes_val  or "",
+            }
+
+    st.write("")
+
+    # ── Action buttons ────────────────────────────────────────────────────
+    ba, bb = st.columns(2)
+
+    if ba.button("⚡ Auto-assign Missing Auditors", use_container_width=True):
         ok, msg = _engine_call("auto_assign_auditors", tenant_id, plan["plan_id"])
         if ok:
             st.success(msg)
-            plan = _engine_call("get_audit_plan_by_calendar_audit", calendar_audit_id=calendar_audit_id)
-            slots = plan.get("slots", []) or []
-            st.session_state[ss_key] = {s.get("id"): {"department": s.get("department") or "", "auditor_name": s.get("auditor_name") or "", "notes": s.get("notes") or ""} for s in slots}
+            st.cache_data.clear()
             _rerun()
         else:
             st.error(msg)
 
-    if c2.button("Save Audit Plan"):
-        payload = [{"plan_date": s.get("plan_date"), "slot_start": s.get("slot_start"), "slot_end": s.get("slot_end"), "department": edits.get(s.get("id"), {}).get("department", "") or "", "auditor_name": edits.get(s.get("id"), {}).get("auditor_name", "") or "", "notes": edits.get(s.get("id"), {}).get("notes", "") or ""} for s in slots]
-        ok, msg = _engine_call("update_audit_plan_slots", tenant_id, plan["plan_id"], payload)
+    if bb.button("💾 Save Audit Plan", type="primary", use_container_width=True):
+        payload = []
+        for s in slots:
+            sid = s.get("id")
+            e   = edits.get(sid, {})
+            payload.append({
+                "plan_date":    s.get("plan_date"),
+                "slot_start":   s.get("slot_start"),
+                "slot_end":     s.get("slot_end"),
+                "department":   e.get("department",""),
+                "auditor_name": e.get("auditor_name",""),
+                "notes":        e.get("notes",""),
+            })
+        ok, msg = _engine_call(
+            "update_audit_plan_slots", tenant_id, plan["plan_id"], payload)
         if ok:
-            st.success(msg)
+            st.success(f"✅ {msg}")
         else:
             st.error(msg)
 
@@ -861,247 +1285,352 @@ def page_admin_checklist():
 
 def page_auditor_checklist():
     st.title("Checklist (Auditor)")
-    st.caption("Answer checklist points one-by-one. The next question unlocks only after you save Observation and Evidence for the current one.")
+
     if not person_name:
-        st.error("Auditor profile not linked to this account."); st.stop()
+        st.error("Auditor profile not linked."); st.stop()
     if not my_audits:
-        st.info("No audits assigned to you yet."); st.stop()
+        st.info("No audits assigned yet."); st.stop()
     if not checklist_department:
-        st.info("Select a department from the sidebar Checklist sub-menu."); st.stop()
+        st.info("Select a department from the sidebar."); st.stop()
 
     dept = checklist_department.strip()
-    dept_audits = [a for a in my_audits if (a.get("audited_department") or "").strip().lower() == dept.lower()]
+    dept_audits = [a for a in my_audits
+                   if (a.get("audited_department") or "").strip().lower() == dept.lower()]
     if not dept_audits:
-        st.info(f"No audits assigned to you for department: {dept}"); st.stop()
+        st.info(f"No audits for department: {dept}"); st.stop()
 
     labels, label_to_id = build_audit_dropdown(dept_audits, restrict_to_auditor=False, auditor_name=None)
-    audit_id = label_to_id[st.selectbox("Select Audit", options=labels, key=f"aud_chk_pick_audit_{dept}")]
+    audit_id = label_to_id[st.selectbox("Select Audit", options=labels, key=f"chk_aud_{dept}")]
     audit = _engine_call("get_audit", audit_id)
-    if not audit:
-        st.error("Audit not found."); st.stop()
+    if not audit: st.error("Audit not found."); st.stop()
 
     if audit.get("assigned_auditor") == person_name and audit.get("status") == "Assigned":
         _engine_call("set_audit_status", audit_id, "In Progress")
         audit = _engine_call("get_audit", audit_id)
 
     sections = _cached_sections_for_dept(_current_tenant_id(), dept)
-    if not sections:
-        st.info(f"No checklist sections found for department '{dept}'. Ask admin to create sections in Admin → Checklist."); st.stop()
+    if not sections: st.info("No checklist sections found."); st.stop()
 
-    st.subheader("Department Checklist")
-    section = st.selectbox("Select Checklist Section", options=sections, key=f"aud_chk_section_{audit_id}_{dept}")
-    can_edit = audit.get("assigned_auditor") == person_name and audit.get("status") == "In Progress"
+    section  = st.selectbox("Select Section", options=sections, key=f"chk_sec_{audit_id}_{dept}")
+    can_edit = (audit.get("assigned_auditor") == person_name
+                and audit.get("status") == "In Progress")
     if not can_edit:
-        st.warning("Checklist is locked. You can edit only when this audit is 'In Progress' and assigned to you.")
+        st.warning("Read-only — audit must be In Progress and assigned to you.")
 
-    rows = _engine_call("get_checklist_rows_for_audit_section", audit_id, dept, section)
-    prog = _engine_call("get_checklist_progress", audit_id, dept, section)
-    total_main = int(prog.get("total", 0) or 0)
-    unlocked_main = int(prog.get("unlocked", 0) or 0)
-    completed_main = int(prog.get("completed_prefix", 0) or 0)
+    # ── helpers (mirrors prototype exactly) ──────────────────────────────────
+    def _int(v):
+        try: return int(float(str(v))) if v is not None else None
+        except: return None
 
-    if not rows:
-        st.info("No checklist items found in this section.")
-        return
+    def _kids(all_rows, parent_sr, level):
+        p = _int(parent_sr)
+        if p is None: return []
+        return [r for r in all_rows
+                if _int(r.get("parent_order")) == p
+                and str(r.get("item_level","")).strip() == level]
 
-    # Separate main questions from sub/subsub items
-    main_rows = [r for r in rows if str(r.get("item_level", "main")) == "main"]
+    def _done(r):
+        return (bool(str(r.get("observation","") or "").strip())
+                and bool(str(r.get("evidence","") or "").strip()))
 
-    if not main_rows:
-        st.info("No checklist items found in this section.")
-        return
+    def _walk_main(all_rows, mrow):
+        """Flat ordered walk for one main: main → subA → subsub_a → subsub_b → subB → ..."""
+        nodes = [mrow]
+        for s in _kids(all_rows, mrow["sr_no"], "sub"):
+            nodes.append(s)
+            for ss in _kids(all_rows, s["sr_no"], "subsub"):
+                nodes.append(ss)
+        return nodes
 
-    st.progress(completed_main / total_main if total_main else 0.0)
-    st.caption(f"Progress: {completed_main}/{total_main} main questions completed · {unlocked_main}/{total_main} unlocked")
+    def _subtree_done(all_rows, mrow):
+        return all(_done(n) for n in _walk_main(all_rows, mrow))
 
-    # CSS for tree styling
+    def _node_label(all_rows, node, mains_list):
+        lvl = str(node.get("item_level","")).strip()
+        if lvl == "main":
+            mi = next((i for i,m in enumerate(mains_list)
+                       if str(m.get("sr_no","")) == str(node.get("sr_no",""))), 0)
+            return f"Q{mi+1}"
+        if lvl == "sub":
+            sibs = _kids(all_rows, node.get("parent_order"), "sub")
+            si = next((i for i,s in enumerate(sibs)
+                       if str(s.get("sr_no","")) == str(node.get("sr_no",""))), 0)
+            return chr(65 + si)
+        if lvl == "subsub":
+            sibs = _kids(all_rows, node.get("parent_order"), "subsub")
+            ssi = next((i for i,ss in enumerate(sibs)
+                        if str(ss.get("sr_no","")) == str(node.get("sr_no",""))), 0)
+            return chr(97 + ssi)
+        return "?"
+
+    # ── fetch data ────────────────────────────────────────────────────────────
+    rows  = _engine_call("get_checklist_rows_for_audit_section", audit_id, dept, section) or []
+    mains = [r for r in rows if str(r.get("item_level","main")).strip() == "main"]
+    if not mains:
+        st.info("No checklist items found in this section."); return
+
+    total_q = len(mains)
+    done_q  = sum(1 for m in mains if _subtree_done(rows, m))
+
+    # ── session state (mirrors prototype: selSr + stepSr) ────────────────────
+    sel_key  = f"chk_sel::{audit_id}::{section}"
+    step_key = f"chk_step::{audit_id}::{section}"
+    if sel_key  not in st.session_state: st.session_state[sel_key]  = None
+    if step_key not in st.session_state: st.session_state[step_key] = None
+
+    sel_sr  = st.session_state[sel_key]
+    step_sr = st.session_state[step_key]
+
+    # ── CSS ───────────────────────────────────────────────────────────────────
     st.markdown("""<style>
-    .chk-main{background:#fff;border:1px solid #e4e7ec;border-radius:8px;padding:12px 16px;margin-bottom:4px;box-shadow:none;transition:border-color 0.15s;}
-    .chk-main.unlocked{border-left:3px solid #94a3b8;}
-    .chk-main.locked{opacity:0.4;background:#fafafa;}
-    .chk-main.done{border-left:3px solid #4ade80;background:#fafffe;}
-    .chk-main-label{font-size:14px;font-weight:600;color:#1e293b;letter-spacing:-0.1px;}
-    .chk-badge{font-size:10px;font-weight:600;padding:2px 8px;border-radius:4px;margin-left:10px;vertical-align:middle;letter-spacing:0.2px;}
-    .badge-done{background:#f0fdf4;color:#16a34a;border:1px solid #bbf7d0;}
-    .badge-pending{background:#f8fafc;color:#64748b;border:1px solid #e2e8f0;}
-    .badge-locked{background:#f8fafc;color:#cbd5e1;border:1px solid #f1f5f9;}
-    .chk-sub{background:#fafafa;border:1px solid #f1f5f9;border-left:2px solid #cbd5e1;border-radius:6px;padding:9px 14px;margin:3px 0 3px 20px;}
-    .chk-sub.done{border-left-color:#4ade80;background:#fafffe;}
-    .chk-sub-label{font-size:13px;font-weight:500;color:#475569;}
-    .chk-subsub{background:#fafafa;border:1px solid #f1f5f9;border-left:2px solid #e2e8f0;border-radius:5px;padding:7px 12px;margin:3px 0 3px 40px;}
-    .chk-subsub.done{border-left-color:#86efac;}
-    .chk-subsub-label{font-size:12px;font-weight:400;color:#64748b;}
-    .chk-connector{border-left:1px solid #e2e8f0;margin-left:16px;padding-left:14px;margin-bottom:4px;padding-top:4px;}
+    .chk-card{
+        background:#fff;border:1px solid #e2e8f0;
+        border-left:4px solid #94a3b8;border-radius:9px;
+        padding:14px 16px;margin-bottom:8px;
+        display:flex;align-items:flex-start;gap:12px;
+    }
+    .chk-card.done{border-left-color:#22c55e;background:#f0fdf4;}
+    .chk-num{
+        min-width:32px;height:32px;border-radius:50%;flex-shrink:0;
+        display:flex;align-items:center;justify-content:center;
+        font-size:12px;font-weight:700;
+        background:#f1f5f9;color:#64748b;margin-top:3px;
+    }
+    .chk-num.done{background:#dcfce7;color:#15803d;}
+    .chk-qtext{flex:1;font-size:14px;font-weight:600;color:#1e293b;line-height:1.5;padding-top:4px;}
+    .chk-qtext.muted{color:#94a3b8;}
+    .node-main{
+        display:flex;align-items:flex-start;gap:10px;
+        background:#fff;border:1px solid #e2e8f0;border-left:4px solid #94a3b8;
+        border-radius:8px;padding:12px 14px;margin-bottom:6px;
+    }
+    .node-sub{
+        display:flex;align-items:flex-start;gap:10px;
+        background:#f8fafc;border:1px solid #e2e8f0;border-left:3px solid #a5b4fc;
+        border-radius:7px;padding:10px 13px;margin:4px 0 4px 24px;
+    }
+    .node-subsub{
+        display:flex;align-items:flex-start;gap:10px;
+        background:#f8fafc;border:1px solid #e2e8f0;border-left:3px solid #ddd6fe;
+        border-radius:6px;padding:9px 12px;margin:4px 0 4px 48px;
+    }
+    .node-main.active,.node-sub.active,.node-subsub.active{
+        border-left-color:#6366f1;background:#eef2ff;box-shadow:0 0 0 2px #c7d2fe;
+    }
+    .node-main.done,.node-sub.done,.node-subsub.done{
+        border-left-color:#22c55e;background:#f0fdf4;
+    }
+    .node-badge{
+        min-width:26px;height:26px;border-radius:50%;flex-shrink:0;
+        display:flex;align-items:center;justify-content:center;
+        font-size:11px;font-weight:700;background:#f1f5f9;color:#64748b;
+    }
+    .node-badge.active{background:#e0e7ff;color:#4338ca;}
+    .node-badge.done{background:#dcfce7;color:#15803d;}
+    .node-lbl{font-size:10px;font-weight:700;color:#94a3b8;letter-spacing:.5px;
+              text-transform:uppercase;margin-bottom:3px;}
+    .node-txt{font-size:13px;font-weight:600;color:#1e293b;line-height:1.5;flex:1;}
+    .node-tick{font-size:13px;color:#16a34a;font-weight:700;flex-shrink:0;padding-top:2px;}
+    .chk-form{
+        background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;
+        padding:14px 16px;margin-bottom:10px;
+    }
     </style>""", unsafe_allow_html=True)
 
-    # Track which main question is expanded
-    active_key = f"chk_active::{audit_id}::{dept}::{section}"
-    if active_key not in st.session_state:
-        st.session_state[active_key] = completed_main if completed_main < total_main else 0
+    # ── progress bar ──────────────────────────────────────────────────────────
+    st.progress(done_q / total_q if total_q else 0.0)
+    st.caption(f"{done_q} / {total_q} questions completed")
+    st.write("")
 
-    def _row_complete(r):
-        return bool(str(r.get("observation","") or "").strip()) and bool(str(r.get("evidence","") or "").strip())
+    # ═══════════════════════════════════════════════════════════════════════════
+    # VIEW A — Question list  (sel_sr is None)
+    # ═══════════════════════════════════════════════════════════════════════════
+    if sel_sr is None:
+        st.markdown("**Select a question to answer:**")
+        st.write("")
 
-    def _get_children(parent_sr, level):
-        """Get immediate children of a parent item."""
-        try:
-            parent_int = int(str(parent_sr))
-        except Exception:
-            return []
-        return [r for r in rows if r.get("parent_order") == parent_int and str(r.get("item_level","")) == level]
+        for mi, mrow in enumerate(mains):
+            main_sr = str(mrow.get("sr_no",""))
+            is_done = _subtree_done(rows, mrow)
+            q_text  = str(mrow.get("checklist","")).strip() or "—"
+            num_cls = "done" if is_done else ""
+            card_cls= "done" if is_done else ""
+            num_lbl = "✓" if is_done else f"Q{mi+1}"
 
-    def _subtree_complete(main_row):
-        """Check if main question + all its sub/subsub items are answered."""
-        if not _row_complete(main_row): return False
-        sr = main_row.get("sr_no")
-        for sub in _get_children(sr, "sub"):
-            if not _row_complete(sub): return False
-            for subsub in _get_children(sub.get("sr_no"), "subsub"):
-                if not _row_complete(subsub): return False
-        return True
+            st.markdown(
+                f'<div class="chk-card {card_cls}">'
+                f'<div class="chk-num {num_cls}">{num_lbl}</div>'
+                f'<div class="chk-qtext">{q_text}</div>'
+                f'</div>',
+                unsafe_allow_html=True)
 
-    def _render_answer_fields(row, indent_label, key_prefix):
-        """Render observation+evidence fields for a single row."""
-        sr_no = str(row.get("sr_no","")).strip()
-        obs_k = f"chk_obs::{audit_id}::{dept}::{section}::{sr_no}"
-        ev_k  = f"chk_ev::{audit_id}::{dept}::{section}::{sr_no}"
-        if obs_k not in st.session_state:
-            st.session_state[obs_k] = str(row.get("observation","") or "")
-        if ev_k not in st.session_state:
-            st.session_state[ev_k] = str(row.get("evidence","") or "")
-        obs = st.text_area(f"Observation * ({indent_label})", key=obs_k, height=90, disabled=not can_edit)
-        ev  = st.text_area(f"Evidence * ({indent_label})", key=ev_k, height=70, disabled=not can_edit)
-        sc, nc, _ = st.columns([1, 1.3, 3.5])
-        saved_ok = False
-        with sc:
-            if st.button("💾 Save", key=f"save_{key_prefix}_{sr_no}", disabled=not can_edit, use_container_width=True):
-                if not str(obs or "").strip() or not str(ev or "").strip():
-                    st.error("Observation and Evidence required.")
-                else:
-                    ok, msg = _engine_call("save_single_checklist_response", audit_id=audit_id, dept=dept, section=section, sr_no=sr_no, observation=obs, evidence=ev, auditor_name=person_name)
-                    if ok: saved_ok = True; st.success("Saved."); st.rerun()
-                    else: st.error(msg)
-        return saved_ok
+            btn_lbl = "✏️ Re-answer" if is_done else "▶ Answer"
+            if st.button(btn_lbl, key=f"selq_{audit_id}_{section}_{main_sr}"):
+                walk  = _walk_main(rows, mrow)
+                first = next((n for n in walk if not _done(n)), walk[0])
+                st.session_state[sel_key]  = main_sr
+                st.session_state[step_key] = str(first.get("sr_no",""))
+                st.rerun()
+            st.write("")
 
-    # ── Render each main question ──────────────────────────────────────────────
-    for mi, main_row in enumerate(main_rows):
-        sr_no = str(main_row.get("sr_no","")).strip() or str(mi + 1)
-        q_text = str(main_row.get("checklist","")).strip() or "—"
-        is_locked = mi >= unlocked_main
-        is_done_full = _subtree_complete(main_row)
-        is_active = st.session_state[active_key] == mi
+        if done_q == total_q:
+            st.success("✅ All questions in this section are complete!")
 
-        # Status badge
-        if is_locked:
-            badge_html = '<span class="chk-badge badge-locked">🔒 Locked</span>'
-            main_cls = "locked"
-        elif is_done_full:
-            badge_html = '<span class="chk-badge badge-done">✅ Done</span>'
-            main_cls = "done"
-        else:
-            badge_html = '<span class="chk-badge badge-pending">📝 In Progress</span>'
-            main_cls = "unlocked"
+    # ═══════════════════════════════════════════════════════════════════════════
+    # VIEW B — Answering one selected question (sel_sr is set)
+    # ═══════════════════════════════════════════════════════════════════════════
+    else:
+        mrow = next((m for m in mains if str(m.get("sr_no","")) == sel_sr), None)
+        if mrow is None:
+            st.session_state[sel_key] = None; st.rerun()
 
+        mi      = next(i for i,m in enumerate(mains) if str(m.get("sr_no","")) == sel_sr)
+        q_text  = str(mrow.get("checklist","")).strip() or "—"
+        walk    = _walk_main(rows, mrow)
+        walk_srs= [str(n.get("sr_no","")) for n in walk]
+        step_idx= walk_srs.index(step_sr) if step_sr in walk_srs else 0
+
+        # back button
+        if st.button("← Back to questions", key=f"chk_back_{audit_id}_{section}"):
+            st.session_state[sel_key]  = None
+            st.session_state[step_key] = None
+            st.rerun()
+
+        # question title card
         st.markdown(
-            f'<div class="chk-main {main_cls}">'
-            f'<span class="chk-main-label">Q{mi+1}. {q_text}</span>{badge_html}'
+            f'<div style="background:#fff;border:1px solid #e2e8f0;border-left:4px solid #6366f1;'
+            f'border-radius:8px;padding:12px 16px;margin-bottom:16px;">'
+            f'<div style="font-size:10px;font-weight:700;color:#94a3b8;letter-spacing:.5px;'
+            f'text-transform:uppercase;margin-bottom:4px;">Q{mi+1}</div>'
+            f'<div style="font-size:15px;font-weight:700;color:#1e293b;line-height:1.5;">{q_text}</div>'
             f'</div>',
-            unsafe_allow_html=True
-        )
+            unsafe_allow_html=True)
 
-        if not is_locked:
-            btn_c1, btn_c2, _ = st.columns([1.2, 1.2, 5])
-            with btn_c1:
-                toggle_lbl = "▼ Close" if is_active else "▶ Open"
-                if st.button(toggle_lbl, key=f"chk_toggle_{audit_id}_{dept}_{section}_{mi}", use_container_width=True):
-                    st.session_state[active_key] = -1 if is_active else mi
-                    st.rerun()
-            with btn_c2:
-                if mi > 0 and not is_active:
-                    if st.button("↑ Back", key=f"chk_back_{audit_id}_{dept}_{section}_{mi}", use_container_width=True):
-                        st.session_state[active_key] = mi - 1
-                        st.rerun()
+        # render every node up to and including the active one
+        for ni, node in enumerate(walk):
+            if ni > step_idx:
+                break  # hide nodes not yet reached
 
-        # ── Expanded tree for this main question ────────────────────────────
-        if is_active and not is_locked:
-            with st.container():
-                st.markdown('<div class="chk-connector">', unsafe_allow_html=True)
+            node_sr   = str(node.get("sr_no",""))
+            node_lvl  = str(node.get("item_level","")).strip()
+            node_text = str(node.get("checklist","")).strip() or "—"
+            is_active = node_sr == step_sr
+            is_ndone  = _done(node) and not is_active
+            label     = _node_label(rows, node, mains)
 
-                # Main question answer fields
-                st.markdown(f'<div style="font-size:12px;font-weight:700;color:#6366f1;margin-bottom:4px;">Q{mi+1} — {q_text}</div>', unsafe_allow_html=True)
-                _render_answer_fields(main_row, f"Q{mi+1}", f"main_{mi}")
+            if node_lvl == "main":   base = "node-main"
+            elif node_lvl == "sub":  base = "node-sub"
+            else:                    base = "node-subsub"
 
-                # Sub-questions (A, B, C...)
-                sub_rows = _get_children(sr_no, "sub")
-                for si, sub_row in enumerate(sub_rows):
-                    sub_letter = chr(65 + si)  # A, B, C...
-                    sub_sr = str(sub_row.get("sr_no","")).strip()
-                    sub_text = str(sub_row.get("checklist","")).strip() or "—"
-                    sub_done = _row_complete(sub_row)
-                    sub_cls = "done" if sub_done else ""
+            state_cls  = "active" if is_active else ("done" if is_ndone else "")
+            badge_cls  = "active" if is_active else ("done" if is_ndone else "")
+            tick_html  = '<div class="node-tick">✓</div>' if is_ndone else ""
 
-                    st.markdown(
-                        f'<div class="chk-sub {sub_cls}">'
-                        f'<div class="chk-sub-label">{sub_letter}) {sub_text}</div>'
-                        f'</div>',
-                        unsafe_allow_html=True
-                    )
-                    _render_answer_fields(sub_row, f"{sub_letter})", f"sub_{mi}_{si}")
+            if node_lvl == "main":
+                lbl_text = f"Question {mi+1}"
+            elif node_lvl == "sub":
+                lbl_text = "Sub-question"
+            else:
+                lbl_text = "Sub-sub question"
 
-                    # Sub-sub questions (a, b, c...)
-                    subsub_rows = _get_children(sub_sr, "subsub")
-                    for ssi, subsub_row in enumerate(subsub_rows):
-                        subsub_letter = chr(97 + ssi)  # a, b, c...
-                        subsub_text = str(subsub_row.get("checklist","")).strip() or "—"
-                        subsub_done = _row_complete(subsub_row)
-                        subsub_cls = "done" if subsub_done else ""
+            st.markdown(
+                f'<div class="{base} {state_cls}">'
+                f'<div class="node-badge {badge_cls}">{label}</div>'
+                f'<div style="flex:1">'
+                f'<div class="node-lbl">{lbl_text}</div>'
+                f'<div class="node-txt">{node_text}</div>'
+                f'</div>'
+                f'{tick_html}'
+                f'</div>',
+                unsafe_allow_html=True)
 
-                        st.markdown(
-                            f'<div class="chk-subsub {subsub_cls}">'
-                            f'<div class="chk-subsub-label">{subsub_letter}) {subsub_text}</div>'
-                            f'</div>',
-                            unsafe_allow_html=True
-                        )
-                        _render_answer_fields(subsub_row, f"{subsub_letter})", f"subsub_{mi}_{si}_{ssi}")
+            # answer form — only for active node
+            if is_active:
+                obs_k = f"obs::{audit_id}::{section}::{node_sr}"
+                ev_k  = f"ev::{audit_id}::{section}::{node_sr}"
+                if obs_k not in st.session_state:
+                    st.session_state[obs_k] = str(node.get("observation","") or "")
+                if ev_k not in st.session_state:
+                    st.session_state[ev_k]  = str(node.get("evidence","") or "")
 
-                # "Mark complete & next" button when all fields in this main Q are answered
-                if _subtree_complete(main_row) and mi < total_main - 1:
-                    st.success("✅ This question is fully answered!")
-                    if st.button("Next Question ➜", key=f"chk_next_{audit_id}_{dept}_{section}_{mi}", type="primary"):
-                        prog2 = _engine_call("get_checklist_progress", audit_id, dept, section)
-                        unlocked2 = int(prog2.get("unlocked", 0) or 0)
-                        if mi + 1 < unlocked2:
-                            st.session_state[active_key] = mi + 1
-                        st.rerun()
+                # indent the form to match the node level
+                ml = {"main":0,"sub":24,"subsub":48}.get(node_lvl, 0)
+                st.markdown(f'<div class="chk-form" style="margin-left:{ml}px">',
+                            unsafe_allow_html=True)
+                obs = st.text_area("Observation *", key=obs_k, height=90, disabled=not can_edit)
+                ev  = st.text_area("Evidence *",    key=ev_k,  height=70, disabled=not can_edit)
 
+                is_last = ni == len(walk) - 1
+                btn_lbl = "Save & Finish ✓" if is_last else "Save & Next ➜"
+
+                if st.button(btn_lbl, key=f"savebtn_{audit_id}_{section}_{node_sr}",
+                             type="primary", disabled=not can_edit):
+                    if not str(obs or "").strip() or not str(ev or "").strip():
+                        st.error("Both Observation and Evidence are required.")
+                    else:
+                        ok, msg = _engine_call(
+                            "save_single_checklist_response",
+                            audit_id=audit_id, dept=dept, section=section,
+                            sr_no=node_sr, observation=obs, evidence=ev,
+                            auditor_name=person_name)
+                        if not ok:
+                            st.error(msg)
+                        else:
+                            st.session_state.pop(obs_k, None)
+                            st.session_state.pop(ev_k,  None)
+                            if is_last:
+                                # question fully done → back to list
+                                st.session_state[sel_key]  = None
+                                st.session_state[step_key] = None
+                            else:
+                                # advance to next node
+                                st.session_state[step_key] = walk_srs[ni + 1]
+                            st.rerun()
                 st.markdown('</div>', unsafe_allow_html=True)
 
-        st.write("")
 
 def page_audit_details():
     st.title("Audit Details")
     render_status_legend()
     st.write("")
-    labels, label_to_id = build_audit_dropdown(all_audits, restrict_to_auditor=(role == "auditor"), auditor_name=person_name)
+
+    labels, label_to_id = build_audit_dropdown(
+        all_audits,
+        restrict_to_auditor=(role == "auditor"),
+        auditor_name=person_name,
+    )
+
     if not labels:
-        st.warning("No audits available."); st.stop()
-    selected_id = label_to_id[st.selectbox("Select Audit ID", options=labels, key="audit_details_select")]
+        st.warning("No audits available.")
+        st.stop()
+
+    selected_label = st.selectbox("Select Audit ID", options=labels, key="audit_details_select")
+    selected_id = label_to_id[selected_label]
+
     audit = _engine_call("get_audit", selected_id) if selected_id else None
     if not audit:
-        st.warning("Select an audit."); st.stop()
+        st.warning("Select an audit.")
+        st.stop()
+
     if role == "auditor" and audit.get("assigned_auditor") != person_name:
-        st.error("Access denied. You can view only audits assigned to you."); st.stop()
+        st.error("Access denied. You can view only audits assigned to you.")
+        st.stop()
 
     skill_cat = get_skill_catalog()
+
     st.subheader("Summary")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("Status", audit.get("status"))
     c2.metric("Department", audit.get("audited_department"))
     c3.metric("Auditor", audit.get("assigned_auditor"))
     c4.metric("Reports Uploaded", len(audit.get("reports", [])))
+
     st.write("**Title:**", audit.get("title") or "-")
     st.write("**Scope:**", audit.get("scope") or "-")
-    st.write("**Required Skills:**", ", ".join(skill_cat.get(k, k) for k in audit.get("required_skills", [])) or "-")
+
+    req_keys = audit.get("required_skills", [])
+    st.write("**Required Skills:**", ", ".join([skill_cat.get(k, k) for k in req_keys]) or "-")
+
     st.write("**Created:**", audit.get("created_at"))
     st.write("**Due:**", audit.get("due_date") or "-")
     st.write("**Report Submitted At:**", audit.get("report_submitted_at") or "-")
@@ -1109,21 +1638,32 @@ def page_audit_details():
 
     st.write("")
     st.subheader("Reports")
+
     reports = audit.get("reports", []) or []
     if not reports:
         st.info("No reports uploaded yet.")
     else:
         for idx, r in enumerate(reports, start=1):
             file_name = r.get("file_name") or f"report_{idx}"
+            uploaded_by = r.get("uploaded_by") or "-"
+            uploaded_at = r.get("uploaded_at") or "-"
             saved_path = r.get("saved_path") or ""
+
             with st.container(border=True):
                 st.write(f"**{file_name}**")
-                st.write(f"Uploaded by: {r.get('uploaded_by') or '-'}")
-                st.write(f"Uploaded at: {r.get('uploaded_at') or '-'}")
+                st.write(f"Uploaded by: {uploaded_by}")
+                st.write(f"Uploaded at: {uploaded_at}")
+
                 if saved_path and os.path.exists(saved_path):
                     try:
                         with open(saved_path, "rb") as f:
-                            st.download_button("Download", f.read(), file_name=file_name, mime="application/octet-stream", key=f"dl_report_{audit.get('audit_id')}_{idx}")
+                            st.download_button(
+                                label="Download",
+                                data=f.read(),
+                                file_name=file_name,
+                                mime="application/octet-stream",
+                                key=f"dl_report_{audit.get('audit_id')}_{idx}",
+                            )
                     except Exception:
                         st.warning("Download unavailable for this file.")
                 else:
@@ -1132,108 +1672,186 @@ def page_audit_details():
     if role == "auditor":
         st.write("")
         st.subheader("Auditor Actions")
-        can_submit = audit.get("assigned_auditor") == person_name and audit.get("status") == "In Progress"
+
+        can_submit = (
+            audit.get("assigned_auditor") == person_name
+            and audit.get("status") == "In Progress"
+        )
+
         st.markdown("#### 1) Upload Report (PDF/XLSX/XLS/CSV)")
-        up = st.file_uploader("Choose a file", type=["pdf", "xlsx", "xls", "csv"], key=f"ad_up_{audit.get('audit_id')}")
+        up = st.file_uploader(
+            "Choose a file",
+            type=["pdf", "xlsx", "xls", "csv"],
+            key=f"ad_up_{audit.get('audit_id')}",
+        )
+
         if st.button("Upload Report", type="primary", disabled=(not can_submit or up is None), key=f"ad_btn_up_{audit.get('audit_id')}"):
-            ok, msg = _engine_call("save_report_file", audit_id=audit["audit_id"], uploaded_by=person_name, original_filename=up.name, file_bytes=up.getvalue())
+            ok, msg = _engine_call(
+                "save_report_file",
+                audit_id=audit["audit_id"],
+                uploaded_by=person_name,
+                original_filename=up.name,
+                file_bytes=up.getvalue(),
+            )
             if ok:
-                st.success(msg); _clear_caches_and_rerun()
+                st.success(msg)
+                _clear_caches_and_rerun()
             else:
-                st.error(msg)
+                    st.error(msg)
 
         st.markdown("#### 2) Submit Report (mandatory before completing)")
         checklist_ok, checklist_msg = _engine_call("validate_audit_checklists_complete", audit["audit_id"])
         if not checklist_ok:
             st.info(checklist_msg)
-        if st.button("Submit Report", type="primary", disabled=(not can_submit or not checklist_ok or not audit.get("reports")), key=f"ad_btn_submit_{audit.get('audit_id')}"):
+
+        submit_disabled = (not can_submit) or (not checklist_ok) or (len(audit.get("reports", []) or []) == 0)
+
+        if st.button("Submit Report", type="primary", disabled=submit_disabled, key=f"ad_btn_submit_{audit.get('audit_id')}"):
             ok, msg = _engine_call("submit_report", audit["audit_id"], person_name)
             if ok:
-                st.success(msg); _clear_caches_and_rerun()
+                st.success(msg)
+                _clear_caches_and_rerun()
             else:
-                st.error(msg)
+                    st.error(msg)
 
         st.markdown("#### 3) Complete Audit (blocked without submission)")
-        if st.button("Complete Audit", disabled=not can_submit, key=f"ad_btn_complete_{audit.get('audit_id')}"):
+        if st.button("Complete Audit", disabled=(not can_submit), key=f"ad_btn_complete_{audit.get('audit_id')}"):
             ok, msg = _engine_call("complete_audit", audit["audit_id"], person_name)
             if ok:
-                st.success(msg); _clear_caches_and_rerun()
+                st.success(msg)
+                _clear_caches_and_rerun()
             else:
-                st.error(msg)
+                    st.error(msg)
 
     if role == "admin":
         st.write("")
         st.subheader("Admin Controls")
+
         _status_options = ["Created", "Assigned", "In Progress", "Report Submitted", "Closed"]
-        _current_status = audit.get("status") or "Assigned"
+        _current_status = (audit.get("status") or "Assigned")
         if _current_status not in _status_options:
             _current_status = "Assigned"
-        new_status = st.selectbox("Set Status", _status_options, index=_status_options.index(_current_status), key=f"ad_status_{audit.get('audit_id')}")
+        new_status = st.selectbox(
+            "Set Status",
+            _status_options,
+            index=_status_options.index(_current_status),
+            key=f"ad_status_{audit.get('audit_id')}",
+        )
         if st.button("Update Status", key=f"ad_status_btn_{audit.get('audit_id')}"):
             ok, msg = _engine_call("set_audit_status", audit["audit_id"], new_status)
             if ok:
-                st.success(msg); _clear_caches_and_rerun()
+                st.success(msg)
+                _clear_caches_and_rerun()
             else:
-                st.error(msg)
+                    st.error(msg)
 
 def page_reports():
     st.title("Reports")
-    st.caption("View submitted audit files and generated final PDFs. Admin can generate and delete final PDFs; auditors can only view/download.")
+    st.caption(
+        "View submitted audit files and generated final PDFs. "
+        "Admin can generate and delete final PDFs; auditors can only view/download."
+    )
+
+    import os
+    import engine
+    import report_generator
+
     auth = st.session_state.get("auth", {})
     tenant_id = auth.get("tenant_id")
     username = auth.get("username")
     role = auth.get("role")
 
     if not tenant_id:
-        st.error("Tenant not found in session. Please log in again."); st.stop()
+        st.error("Tenant not found in session. Please log in again.")
+        st.stop()
 
-    def _download_abs_path_button(label, abs_path, key):
+    def _download_abs_path_button(label: str, abs_path: str, key: str):
         try:
             with open(abs_path, "rb") as f:
-                st.download_button(label=label, data=f.read(), file_name=os.path.basename(abs_path), mime="application/pdf", key=key)
+                st.download_button(
+                    label=label,
+                    data=f.read(),
+                    file_name=os.path.basename(abs_path),
+                    mime="application/pdf",
+                    key=key,
+                )
         except Exception as e:
             st.warning(f"Download unavailable: {e}")
 
     if role == "admin":
         st.subheader("Generate Final Audit Report")
-        status_filter = st.selectbox("Select audit status", ["Report Submitted", "Closed"], index=0)
-        all_audits_r = engine.list_audits(tenant_id=tenant_id)
-        eligible_audits = [a for a in all_audits_r if a.get("status") == status_filter]
+
+        status_filter = st.selectbox(
+            "Select audit status",
+            options=["Report Submitted", "Closed"],
+            index=0,
+        )
+
+        all_audits = engine.list_audits(tenant_id=tenant_id)
+        eligible_audits = [
+            a for a in all_audits if a.get("status") == status_filter
+        ]
+
         if not eligible_audits:
             st.info(f"No audits with status '{status_filter}'.")
         else:
             labels, label_to_id = engine.get_audit_dropdown_options(tenant_id=tenant_id)
-            eligible_ids = {a["audit_id"] for a in eligible_audits}
-            selected_labels = st.multiselect("Select audits to include", options=[lbl for lbl in labels if label_to_id[lbl] in eligible_ids])
+
+            selected_labels = st.multiselect(
+                "Select audits to include",
+                options=[
+                    lbl for lbl in labels
+                    if label_to_id[lbl] in {a["audit_id"] for a in eligible_audits}
+                ],
+            )
+
             selected_ids = [label_to_id[lbl] for lbl in selected_labels]
+
             admin_summaries_by_audit_id = {}
-            if selected_ids:
-                st.markdown("**Audit Summaries**")
-                for i, aid in enumerate(selected_ids):
-                    lbl = selected_labels[i] if i < len(selected_labels) else aid
-                    st.markdown(f"**Summary for: {lbl}**")
-                    admin_summaries_by_audit_id[aid] = st.text_area(
-                        label="",
-                        key=f"summary_{aid}",
-                        placeholder="Enter summary for this audit...",
-                        height=120,
-                    )
-            output_name = st.text_input("Optional PDF filename (leave blank for auto-name)", placeholder="Final_Audit_Report_Q1_2026.pdf")
+
+            for aid in selected_ids:
+                st.markdown(f"**Summary for audit `{aid}`**")
+                admin_summaries_by_audit_id[aid] = st.text_area(
+                    label="",
+                    key=f"summary_{aid}",
+                    height=120,
+                )
+
+            output_name = st.text_input(
+                "Optional PDF filename (leave blank for auto-name)",
+                placeholder="Final_Audit_Report_Q1_2026.pdf",
+            )
+
             if st.button("Generate Final Report", type="primary"):
                 with st.spinner("Generating PDF..."):
                     if not _HAS_REPORT_GEN:
                         st.error("PDF generation is unavailable because the report generator dependencies are missing (reportlab). Install reportlab in requirements.txt to enable PDF generation.")
-                        ok, pdf_path = False, None
+                        ok, msg, pdf_path = False, "report_generator unavailable", None
                     else:
-                        ok, msg, pdf_path = report_generator.generate_final_audit_report_pdf(tenant_id=tenant_id, generated_by=username, selected_audit_ids=selected_ids, admin_summaries_by_audit_id=admin_summaries_by_audit_id, output_filename=output_name or None)
-                        if ok:
-                            st.success(msg); _rerun()
-                        else:
-                            st.error(msg)
+                        ok, msg, pdf_path = report_generator.generate_final_audit_report_pdf(
+                        tenant_id=tenant_id,
+                        generated_by=username,
+                        selected_audit_ids=selected_ids,
+                        admin_summaries_by_audit_id=admin_summaries_by_audit_id,
+                        output_filename=output_name or None,
+                    )
+
+                if ok:
+                    st.success(msg)
+                    _rerun()
+                else:
+                    st.error(msg)
+
         st.divider()
 
     st.subheader("Generated Final Reports")
-    reports = engine.list_final_generated_reports_for_user(username=username, role=role, tenant_id=tenant_id)
+
+    reports = engine.list_final_generated_reports_for_user(
+        username=username,
+        role=role,
+        tenant_id=tenant_id,
+    )
+
     if not reports:
         st.info("No generated final reports available.")
     else:
@@ -1241,63 +1859,131 @@ def page_reports():
             st.markdown(f"### Generated on {r['created_at']}")
             st.write("Created by:", r["created_by"])
             st.write("Summary:", r["summary"])
-            abs_path = engine.resolve_final_report_pdf_abs_path(tenant_id, r["pdf_rel_path"])
+
+            abs_path = engine.resolve_final_report_pdf_abs_path(
+                tenant_id, r["pdf_rel_path"]
+            )
+
             if not os.path.exists(abs_path):
                 st.error("PDF file missing on server.")
             else:
-                _download_abs_path_button(label="Download PDF", abs_path=abs_path, key=f"download_{r['id']}")
+                _download_abs_path_button(
+                    label="Download PDF",
+                    abs_path=abs_path,
+                    key=f"download_{r['id']}",
+                )
+
             if role == "admin":
-                if st.button("Delete Report", key=f"delete_{r['id']}"):
-                    ok, msg = engine.delete_final_generated_report(report_id=r["id"], requester_role=role, tenant_id=tenant_id)
+                if st.button(
+                    "Delete Report",
+                    key=f"delete_{r['id']}",
+                ):
+                    ok, msg = engine.delete_final_generated_report(
+                        report_id=r["id"],
+                        requester_role=role,
+                        tenant_id=tenant_id,
+                    )
                     if ok:
-                        st.success(msg); _rerun()
+                        st.success(msg)
+                        _rerun()
                     else:
                         st.error(msg)
+
             st.divider()
 
 def page_auditor_my_audits():
     st.title("My Audits")
     render_panel("Assigned Audits", "Only audits assigned to your account are visible here.")
     st.write("")
+
     q = st.text_input("Search my audits", placeholder="Search by title, department, status, ID")
     render_status_legend()
     st.write("")
     audits_table(my_audits, search_query=q)
+
     st.info("Rule: Upload at least one report, submit it, then you can complete the audit.")
 
 def page_auditor_my_timetable():
+    import pandas as pd
+
     st.title("My Timetable")
     render_panel("Timetable View", "Slots assigned by Admin are displayed for the selected date range.")
     st.write("")
+
     start_date = st.date_input("From", value=date.today(), key="mytt_from")
     days = st.number_input("Number of days", min_value=1, max_value=60, value=7, step=1, key="mytt_days")
-    days_map = _cached_timetable_schedule().get("days", {})
-    rows = [{"Date": (start_date + timedelta(days=i)).isoformat(), "Time Slot": slot, "Department to Audit": a.get("department", ""), "Auditor": a.get("auditor", "")} for i in range(int(days)) for slot, audits in days_map.get((start_date + timedelta(days=i)).isoformat(), {}).items() for a in audits if a.get("auditor") == person_name]
+
+    schedule = _cached_timetable_schedule()
+    days_map = schedule.get("days", {})
+
+    rows = []
+    for i in range(int(days)):
+        d = (start_date + timedelta(days=i)).isoformat()
+        day_slots = days_map.get(d, {})
+
+        for slot, audits in day_slots.items():
+            for a in audits:
+                if a.get("auditor") == person_name:
+                    rows.append({
+                        "Date": d,
+                        "Time Slot": slot,
+                        "Department to Audit": a.get("department", ""),
+                        "Auditor": a.get("auditor", ""),
+                    })
+
     if not rows:
         st.info("No timetable slots assigned to you in this period.")
     else:
-        df = _pd.DataFrame(rows, columns=["Date", "Time Slot", "Department to Audit", "Auditor"]).sort_values(by=["Date", "Time Slot"])
+        df = pd.DataFrame(rows, columns=["Date", "Time Slot", "Department to Audit", "Auditor"])
+        df = df.sort_values(by=["Date", "Time Slot"])
         st.dataframe(df, use_container_width=True, hide_index=True)
-        st.markdown("### Today's schedule")
+
+        st.markdown("### Today’s schedule")
         today = date.today().isoformat()
         today_rows = [r for r in rows if r["Date"] == today]
         if not today_rows:
             st.write("No slots for today.")
         else:
-            st.table(_pd.DataFrame(today_rows).sort_values("Time Slot")[["Time Slot", "Department to Audit"]])
+            tdf = pd.DataFrame(today_rows, columns=["Date", "Time Slot", "Department to Audit", "Auditor"])
+            tdf = tdf.sort_values(by=["Time Slot"])
+            st.table(tdf[["Time Slot", "Department to Audit"]])
 
-# ── Sidebar navigation ────────────────────────────────────────────────────────
 checklist_department: Optional[str] = None
+
+role = (st.session_state.get("auth") or {}).get("role", "auditor")
 
 with st.sidebar:
     st.markdown("### Admin Menu" if role == "admin" else "### Menu")
-    admin_pages = ["Dashboard", "Audit Calender", "Audit Plan", "Auditors & Skills", "Checklist", "Audit Details", "Reports"]
-    auditor_pages = ["Dashboard", "My Audits", "Checklist", "Audit Details", "Reports"]
-    page = st.radio("", admin_pages if role == "admin" else auditor_pages, label_visibility="collapsed")
+
+    if role == "admin":
+        page = st.radio(
+            "",
+            [
+                "Dashboard",
+                "Audit Calender",
+                "Audit Plan",
+                "Auditors & Skills",
+                "Checklist",
+                "Audit Details",
+                "Reports",
+            ],
+            label_visibility="collapsed",
+        )
+    else:
+        page = st.radio(
+            "",
+            [
+                "Dashboard",
+                "My Audits",
+                "Checklist",
+                "Audit Details",
+                "Reports",
+            ],
+            label_visibility="collapsed",
+        )
 
 render_breadcrumb(role, page)
 
-# ── Page routing ──────────────────────────────────────────────────────────────
 if role == "admin":
     if page == "Dashboard":
         page_admin_dashboard()
@@ -1308,9 +1994,14 @@ if role == "admin":
     elif page == "Auditors & Skills":
         page_admin_auditors_skills()
     elif page == "Checklist":
-        depts = sorted({d for d in _cached_departments_catalog(tenant_id) if str(d).strip()}, key=lambda x: str(x).lower())
+        tenant_id = (st.session_state.get("auth") or {}).get("tenant_id")
+        depts = _cached_departments_catalog(tenant_id) or []
+        depts = [d for d in depts if str(d).strip()]
+        depts = sorted(set(depts), key=lambda x: str(x).lower())
+
         add_key = "➕ Add new department"
         options = depts + ([add_key] if add_key not in depts else [])
+
         if not options:
             st.info("No departments found.")
         else:
@@ -1325,6 +2016,7 @@ if role == "admin":
                         st.success(f"Added department: {new_dept}")
                         _clear_caches_and_rerun()
                 st.stop()
+
             checklist_department = choice
             globals()["checklist_department"] = checklist_department
             page_admin_checklist()
@@ -1332,16 +2024,60 @@ if role == "admin":
         page_audit_details()
     elif page == "Reports":
         page_reports()
+
 else:
     if page == "Dashboard":
         render_panel("Auditor Dashboard", "Your assigned audits and actions.")
         st.metric("Assigned Audits", len(my_audits))
+
         st.markdown("---")
-        st.markdown("""<style>.aog-card{background:#ffffff;border:1px solid #e5e7eb;border-radius:14px;padding:16px 16px 12px 16px;box-shadow:0 6px 18px rgba(15,23,42,0.06);margin-top:10px}.aog-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px}.aog-title{font-size:15px;font-weight:800;color:#0f172a;margin:0;letter-spacing:0.2px}.aog-sub{font-size:12.5px;color:#64748b;margin:4px 0 0 0;line-height:1.4}.aog-tag{font-size:12px;font-weight:700;color:#0f172a;background:#f8fafc;border:1px solid #e5e7eb;border-radius:999px;padding:6px 10px;white-space:nowrap}.aog-list{margin:0;padding-left:18px;color:#0f172a}.aog-list li{margin:8px 0;font-size:13px;line-height:1.45;color:#334155}.aog-list b{color:#0f172a}.aog-foot{margin-top:12px;padding-top:10px;border-top:1px dashed #e5e7eb;display:flex;gap:8px;flex-wrap:wrap;align-items:center;color:#64748b;font-size:12.3px;line-height:1.4}.aog-pill{display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid #e5e7eb;background:#f8fafc;color:#0f172a;font-size:11.5px;font-weight:700}</style><div class="aog-card"><div class="aog-head"><div><div class="aog-title">Auditor Operating Guide</div><div class="aog-sub">Follow this sequence to complete an audit with accurate records and clean closure.</div></div><div class="aog-tag">Quick Guide</div></div><ol class="aog-list"><li><b>Verify session:</b> Confirm the correct <b>Tenant</b>, <b>Username</b>, and <b>Role (Auditor)</b>.</li><li><b>Review assigned audit:</b> Open <b>My Audits</b> and verify department, scope, and due date.</li><li><b>Start audit:</b> Set status to <b>In Progress</b> before entering checklist data.</li><li><b>Complete checklist:</b> Record clear <b>Observations</b> and attach/reference <b>Evidence</b> for each item.</li><li><b>Validate details:</b> Review entries in <b>Audit Details</b> for completeness before submission.</li><li><b>Submit report:</b> Upload the finalized report in <b>Reports</b> and submit as per workflow.</li><li><b>Logout:</b> Sign out after completion, especially on shared systems.</li></ol><div class="aog-foot">Navigation: <span class="aog-pill">My Audits</span><span class="aog-pill">Checklist</span><span class="aog-pill">Audit Details</span><span class="aog-pill">Reports</span></div></div>""", unsafe_allow_html=True)
+
+        st.markdown(
+            """
+            <style>.aog-card{background:#ffffff;border:1px solid #e5e7eb;border-radius:14px;padding:16px 16px 12px 16px;box-shadow:0 6px 18px rgba(15,23,42,0.06);margin-top:10px}.aog-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px}.aog-title{font-size:15px;font-weight:800;color:#0f172a;margin:0;letter-spacing:0.2px}.aog-sub{font-size:12.5px;color:#64748b;margin:4px 0 0 0;line-height:1.4}.aog-tag{font-size:12px;font-weight:700;color:#0f172a;background:#f8fafc;border:1px solid #e5e7eb;border-radius:999px;padding:6px 10px;white-space:nowrap}.aog-list{margin:0;padding-left:18px;color:#0f172a}.aog-list li{margin:8px 0;font-size:13px;line-height:1.45;color:#334155}.aog-list b{color:#0f172a}.aog-foot{margin-top:12px;padding-top:10px;border-top:1px dashed #e5e7eb;display:flex;gap:8px;flex-wrap:wrap;align-items:center;color:#64748b;font-size:12.3px;line-height:1.4}.aog-pill{display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid #e5e7eb;background:#f8fafc;color:#0f172a;font-size:11.5px;font-weight:700}</style>
+
+            <div class="aog-card">
+              <div class="aog-head">
+                <div>
+                  <div class="aog-title">Auditor Operating Guide</div>
+                  <div class="aog-sub">Follow this sequence to complete an audit with accurate records and clean closure.</div>
+                </div>
+                <div class="aog-tag">Quick Guide</div>
+              </div>
+
+              <ol class="aog-list">
+                <li><b>Verify session:</b> Confirm the correct <b>Tenant</b>, <b>Username</b>, and <b>Role (Auditor)</b>.</li>
+                <li><b>Review assigned audit:</b> Open <b>My Audits</b> and verify department, scope, and due date.</li>
+                <li><b>Start audit:</b> Set status to <b>In Progress</b> before entering checklist data.</li>
+                <li><b>Complete checklist:</b> Record clear <b>Observations</b> and attach/reference <b>Evidence</b> for each item.</li>
+                <li><b>Validate details:</b> Review entries in <b>Audit Details</b> for completeness before submission.</li>
+                <li><b>Submit report:</b> Upload the finalized report in <b>Reports</b> and submit as per workflow.</li>
+                <li><b>Logout:</b> Sign out after completion, especially on shared systems.</li>
+              </ol>
+
+              <div class="aog-foot">
+                Navigation:
+                <span class="aog-pill">My Audits</span>
+                <span class="aog-pill">Checklist</span>
+                <span class="aog-pill">Audit Details</span>
+                <span class="aog-pill">Reports</span>
+              </div>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
     elif page == "My Audits":
         page_auditor_my_audits()
     elif page == "Checklist":
-        my_depts = sorted({(a.get("audited_department") or "").strip() for a in my_audits if (a.get("audited_department") or "").strip()}, key=str.lower)
+        my_depts = sorted(
+            {
+                (a.get("audited_department") or "").strip()
+                for a in my_audits
+                if (a.get("audited_department") or "").strip()
+
+            },
+            key=lambda x: x.lower(),
+        )
         if not my_depts:
             st.info("No departments available.")
         else:

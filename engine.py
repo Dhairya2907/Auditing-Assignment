@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import os, re, json, uuid, hashlib, hmac, sqlite3, base64, zlib
+import os, re, json, uuid, hashlib, hmac, sqlite3, base64, zlib, calendar
 def _d(s:str)->str: return zlib.decompress(base64.b64decode(s)).decode('utf-8')
 
 try:
@@ -282,6 +282,11 @@ def migrate_db() -> None:
     except Exception: pass
     try: _ensure_column("audit_plan_slots", "audit_id", "text")
     except Exception: pass
+    # Hierarchy support for checklists
+    try: _ensure_column("checklists_catalog", "item_level", "text not null default 'main'")
+    except Exception: pass
+    try: _ensure_column("checklists_catalog", "parent_order", "integer")
+    except Exception: pass
 
 # ── Tenant helpers ────────────────────────────────────────────────────────────
 def _get_tenant_by_code(tenant_code: str) -> Optional[Dict[str, Any]]:
@@ -322,9 +327,26 @@ def _seed_checklists_if_empty(tenant_id: str) -> None:
             "Management Review Outputs": ["Improvement of the effectiveness of the QMS","Improvement of product-related processes","Improvement of medical device safety and performance","Resource requirements","Actions addressing identified risks","Responsibilities and timelines assigned for actions"],
             "Follow-up & Records": ["Is the effectiveness of previous actions reviewed in subsequent MRMs?","Are management review minutes legible, dated, and approved?"],
         },
-        "Production": {
-            "BMR": ["Is a Batch Manufacturing Record (BMR) available for each batch/lot produced?","Is the BMR version controlled and approved before use?","Are material issue details recorded, including item code, quantity, and traceability to GRN/issue records?","Are critical process parameters and in-process checks recorded at each required step?","Are equipment/line clearance and cleaning status recorded before batch start?","Are yields, reconciliation, and any discrepancies documented and reviewed?","Are deviations, nonconformities, and rework (if any) documented with appropriate approvals?","Are operator and verifier signatures and dates present for all applicable steps?","Is the final review of the BMR performed by an authorized person before batch release or transfer to QA?","Are any attachments (printouts, labels, log sheets) referenced and traceable within the BMR?"],
-        },
+        
+"Production": {
+    "BMR": [
+        {"item_text": "Are the following details available – batch number, manufacturing start and completion date?", "item_level": "main", "parent_order": None},
+        {"item_text": "Are raw material lot numbers mentioned?", "item_level": "sub", "parent_order": 1},
+        {"item_text": "Check for the Certificate of Analysis (COA) of the Raw Materials", "item_level": "subsub", "parent_order": 2},
+        {"item_text": "Does the COA give test names, specified and achieved results", "item_level": "subsub", "parent_order": 2},
+        {"item_text": "Check the Quality Assurance Plan (QAP)", "item_level": "sub", "parent_order": 1},
+        {"item_text": "Does the QAP give details such test stage, test name, method, sample size, acceptance criteria?", "item_level": "subsub", "parent_order": 5},
+
+        {"item_text": "Are the quantities produced and rejected mentioned in the BMR?", "item_level": "main", "parent_order": None},
+        {"item_text": "Is a NCR form filled out in case of rejections?", "item_level": "sub", "parent_order": 7},
+        {"item_text": "Is the NCR report approved by the designated authority?", "item_level": "subsub", "parent_order": 8},
+
+        {"item_text": "Are the instrument IDs mentioned in the BMR?", "item_level": "main", "parent_order": None},
+        {"item_text": "Check the calibration log and report of the instruments.", "item_level": "sub", "parent_order": 10},
+        {"item_text": "Do the calibration reports mention name of an accredited lab", "item_level": "subsub", "parent_order": 11},
+        {"item_text": "Do the calibration reports mention traceability to national or international standards?", "item_level": "subsub", "parent_order": 11},
+    ],
+},
         "Purchase": {
             "Supplier Selection": ["Is supplier selection initiated when a new material, component, or service is required?","Does the Purchase Department identify potential suppliers?","Are supplier identification sources documented","Are suppliers evaluated based on defined selection criteria?","Are suppliers categorized on risk based approach?"],
             "Supplier Evaluation & Approval": ["Is Supplier Assessment completed for potential suppliers","Is the completed assessment reviewed","Are suppliers evaluated and scored as per defined criteria?","Are approved suppliers included in Approved Supplier List","For critical suppliers, is Supplier Quality Agreement executed before approval?"],
@@ -335,11 +357,25 @@ def _seed_checklists_if_empty(tenant_id: str) -> None:
             "Supplier Re-evaluation": ["Is re-evaluation initiated based on performance monitoring results?","Are re-evaluation outcomes documented?"],
         },
     }
+    
     for dept, sections in seed.items():
         for section, items in sections.items():
             for i, item in enumerate(items, start=1):
-                _execute("insert into checklists_catalog (id, tenant_id, department, section, item_order, item_text) values (?, ?, ?, ?, ?, ?);", (_uuid(), tenant_id, dept, section, i, item))
-
+                # Support both legacy string items and hierarchical dict items:
+                # {item_text, item_level ('main'|'sub'|'subsub'), parent_order (int|None)}
+                if isinstance(item, dict):
+                    txt = str(item.get("item_text", "") or "").strip()
+                    lvl = str(item.get("item_level", "main") or "main").strip()
+                    parent = item.get("parent_order")
+                    _execute(
+                        "insert into checklists_catalog (id, tenant_id, department, section, item_order, item_text, item_level, parent_order) values (?, ?, ?, ?, ?, ?, ?, ?);",
+                        (_uuid(), tenant_id, dept, section, i, txt, lvl, parent)
+                    )
+                else:
+                    _execute(
+                        "insert into checklists_catalog (id, tenant_id, department, section, item_order, item_text) values (?, ?, ?, ?, ?, ?);",
+                        (_uuid(), tenant_id, dept, section, i, item)
+                    )
 def ensure_seed_files(tenant_code: str = "", tenant_name: str = "") -> str:
     init_db(); ensure_dirs()
     tenant_code = _normalize_text(tenant_code).lower() or DEFAULT_TENANT_CODE
@@ -349,6 +385,7 @@ def ensure_seed_files(tenant_code: str = "", tenant_name: str = "") -> str:
     for k, v in DEFAULT_SKILLS.items(): ensure_skill_key_exists(k, fallback_label=v, tenant_id=tenant_id)
     for dept, keys in DEFAULT_DEPT_REQUIRED_SKILLS.items(): set_dept_required_skills(dept, keys, tenant_id=tenant_id)
     _seed_checklists_if_empty(tenant_id)
+    _upgrade_seed_bmr_hierarchy_if_needed(tenant_id)
     _ensure_state_row(tenant_id)
     if not _fetch_one("select id from users where tenant_id = ? limit 1;", (tenant_id,)):
         admin_pw = make_password_record("admin123")
@@ -454,6 +491,77 @@ def get_sections_for_department(dept: str, tenant_id: Optional[str] = None) -> L
 def get_items_for_department_section(dept: str, section: str, tenant_id: Optional[str] = None) -> List[str]:
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
     return [str(r["item_text"]) for r in _fetch_all("select item_text from checklists_catalog where tenant_id = ? and department = ? and section = ? order by item_order;", (tenant_id, _normalize_text(dept), _normalize_text(section)))]
+
+def get_hierarchical_items_for_section(dept: str, section: str, tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Return items with level ('main','sub','subsub') and parent_order for tree rendering."""
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    rows = _fetch_all(
+        "select item_order, item_text, item_level, parent_order from checklists_catalog "
+        "where tenant_id = ? and department = ? and section = ? order by item_order;",
+        (tenant_id, _normalize_text(dept), _normalize_text(section))
+    )
+    result = []
+    for r in rows:
+        result.append({
+            "item_order": int(r["item_order"] or 0),
+            "item_text": str(r["item_text"] or "").strip(),
+            "item_level": str(r["item_level"] or "main").strip(),
+            "parent_order": int(r["parent_order"]) if r["parent_order"] is not None else None,
+        })
+    return result
+
+def upsert_section_items_hierarchical(dept: str, section: str, items: List[Dict[str, Any]], tenant_id: Optional[str] = None) -> None:
+    """Save hierarchical items. Each item dict: {item_text, item_level, parent_order}."""
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    dept, section = _normalize_text(dept), _normalize_text(section)
+    if not dept or not section: return
+    _execute("delete from checklists_catalog where tenant_id = ? and department = ? and section = ?;", (tenant_id, dept, section))
+    for idx, item in enumerate([i for i in (items or []) if str(i.get("item_text","")).strip()], start=1):
+        txt = str(item.get("item_text","")).strip()
+        level = str(item.get("item_level","main")).strip() or "main"
+        parent = item.get("parent_order")
+        _execute(
+            "insert into checklists_catalog (id, tenant_id, department, section, item_order, item_text, item_level, parent_order) values (?, ?, ?, ?, ?, ?, ?, ?);",
+            (_uuid(), tenant_id, dept, section, idx, txt, level, parent)
+        )
+
+
+def _upgrade_seed_bmr_hierarchy_if_needed(tenant_id: str) -> None:
+    """If Production → BMR is still a flat (all-main) list, rewrite it so ONLY 3 mains exist (1,2,3) and the rest are sub/subsub."""
+    try:
+        dept = _normalize_text("Production")
+        section = _normalize_text("BMR")
+        rows = _fetch_all(
+            "select item_order, item_text, coalesce(item_level,'') as item_level, parent_order from checklists_catalog "
+            "where tenant_id = ? and department = ? and section = ? order by item_order;",
+            (tenant_id, dept, section),
+        )
+        if not rows:
+            return
+        # If already hierarchical, do nothing.
+        if any(str(r.get("item_level") or "").strip() in ("sub", "subsub") for r in rows):
+            return
+
+        items = [
+            {"item_text": "Are the following details available – batch number, manufacturing start and completion date?", "item_level": "main", "parent_order": None},
+            {"item_text": "Are raw material lot numbers mentioned?", "item_level": "sub", "parent_order": 1},
+            {"item_text": "Check for the Certificate of Analysis (COA) of the Raw Materials", "item_level": "subsub", "parent_order": 2},
+            {"item_text": "Does the COA give test names, specified and achieved results", "item_level": "subsub", "parent_order": 2},
+            {"item_text": "Check the Quality Assurance Plan (QAP)", "item_level": "sub", "parent_order": 1},
+            {"item_text": "Does the QAP give details such test stage, test name, method, sample size, acceptance criteria?", "item_level": "subsub", "parent_order": 5},
+
+            {"item_text": "Are the quantities produced and rejected mentioned in the BMR?", "item_level": "main", "parent_order": None},
+            {"item_text": "Is a NCR form filled out in case of rejections?", "item_level": "sub", "parent_order": 7},
+            {"item_text": "Is the NCR report approved by the designated authority?", "item_level": "subsub", "parent_order": 8},
+
+            {"item_text": "Are the instrument IDs mentioned in the BMR?", "item_level": "main", "parent_order": None},
+            {"item_text": "Check the calibration log and report of the instruments.", "item_level": "sub", "parent_order": 10},
+            {"item_text": "Do the calibration reports mention name of an accredited lab", "item_level": "subsub", "parent_order": 11},
+            {"item_text": "Do the calibration reports mention traceability to national or international standards?", "item_level": "subsub", "parent_order": 11},
+        ]
+        upsert_section_items_hierarchical("Production", "BMR", items, tenant_id=tenant_id)
+    except Exception:
+        return
 
 def upsert_section_items(dept: str, section: str, items: List[str], tenant_id: Optional[str] = None) -> None:
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
@@ -938,37 +1046,164 @@ def load_audit_section_table(audit_id: str, dept: str, section: str, tenant_id: 
 def _checklist_row_complete(row: Dict[str, Any]) -> bool:
     return bool(str(row.get("observation", "") or "").strip()) and bool(str(row.get("evidence", "") or "").strip())
 
-def get_checklist_rows_for_audit_section(audit_id: str, dept: str, section: str, *, tenant_id: Optional[str] = None) -> List[Dict[str, str]]:
+def _norm_parent(val) -> Optional[int]:
+    """Normalize parent_order to int or None — handles str, int, float, None."""
+    if val is None: return None
+    try:
+        v = int(float(str(val)))
+        return v if v > 0 else None
+    except Exception:
+        return None
+
+def get_checklist_rows_for_audit_section(audit_id: str, dept: str, section: str, *, tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
     saved = load_audit_section_table(audit_id, dept, section, tenant_id=tenant_id)
+        
     if saved and isinstance(saved, list):
-        return [{"sr_no": str(r.get("sr_no", "")).strip(), "checklist": str(r.get("checklist", "")).strip(), "observation": str(r.get("observation", "")).strip(), "evidence": str(r.get("evidence", "")).strip()} for r in saved]
+        out: List[Dict[str, Any]] = []
+        missing_hierarchy = False
+        for idx, r in enumerate(saved, start=1):
+            # sr_no must never be empty — fall back to enumerate index
+            sr = str(r.get("sr_no", "")).strip() or str(idx)
+            item_level = r.get("item_level")
+            parent_order = r.get("parent_order")
+            if item_level is None and parent_order is None:
+                missing_hierarchy = True
+            out.append({
+                "sr_no":        sr,
+                "checklist":    str(r.get("checklist", "")).strip(),
+                "observation":  str(r.get("observation", "") or "").strip(),
+                "evidence":     str(r.get("evidence", "") or "").strip(),
+                "item_level":   str(r.get("item_level", "main") or "main").strip() or "main",
+                "parent_order": _norm_parent(r.get("parent_order")),
+            })
+    
+        # If the saved table is older (no hierarchy fields), rebuild it from the latest
+        # hierarchical catalog for this dept/section; keep existing observations/evidence.
+        if missing_hierarchy:
+            hier_items = get_hierarchical_items_for_section(_normalize_text(dept), _normalize_text(section), tenant_id=tenant_id)
+            if hier_items:
+                # Map old answers by checklist text (best-effort)
+                ans_map = {}
+                for r in out:
+                    key = " ".join(str(r.get("checklist", "")).split()).lower()
+                    if key:
+                        ans_map[key] = {"observation": r.get("observation", ""), "evidence": r.get("evidence", "")}
+    
+                rebuilt: List[Dict[str, Any]] = []
+                for it in hier_items:
+                    txt = str(it.get("item_text", "")).strip()
+                    key = " ".join(txt.split()).lower()
+                    prev = ans_map.get(key, {})
+                    rebuilt.append({
+                        "sr_no":        str(it.get("item_order")),
+                        "checklist":    txt,
+                        "observation":  str(prev.get("observation", "") or "").strip(),
+                        "evidence":     str(prev.get("evidence", "") or "").strip(),
+                        "item_level":   str(it.get("item_level", "main") or "main").strip() or "main",
+                        "parent_order": _norm_parent(it.get("parent_order")),
+                    })
+                return rebuilt
+    
+        return out
+    hier_items = get_hierarchical_items_for_section(_normalize_text(dept), _normalize_text(section), tenant_id=tenant_id)
+    if hier_items:
+        return [{
+            "sr_no":        str(item["item_order"]),
+            "checklist":    str(item["item_text"] or "").strip(),
+            "observation":  "",
+            "evidence":     "",
+            "item_level":   str(item["item_level"] or "main").strip() or "main",
+            "parent_order": _norm_parent(item["parent_order"]),
+        } for item in hier_items]
+    # flat fallback (legacy sections with no hierarchy)
     items = get_items_for_department_section(_normalize_text(dept), _normalize_text(section), tenant_id=tenant_id) or []
-    return [{"sr_no": str(i), "checklist": str(item).strip(), "observation": "", "evidence": ""} for i, item in enumerate(items, start=1)]
+    return [{
+        "sr_no": str(i), "checklist": str(item).strip(),
+        "observation": "", "evidence": "",
+        "item_level": "main", "parent_order": None,
+    } for i, item in enumerate(items, start=1)]
 
 def get_checklist_progress(audit_id: str, dept: str, section: str, *, tenant_id: Optional[str] = None) -> Dict[str, int]:
     rows = get_checklist_rows_for_audit_section(audit_id, dept, section, tenant_id=tenant_id)
-    total = len(rows)
-    completed_prefix = next((i for i, r in enumerate(rows) if not _checklist_row_complete(r)), total)
-    return {"total": total, "unlocked": min(total, completed_prefix + 1) if total > 0 else 0, "completed_prefix": completed_prefix, "completed_any": sum(1 for r in rows if _checklist_row_complete(r))}
+    main_rows = [r for r in rows if str(r.get("item_level","main")).strip() == "main"]
+    total_main = len(main_rows)
+
+    def _row_complete(r: Dict[str, Any]) -> bool:
+        """A row is complete when both observation and evidence are non-empty."""
+        return (bool(str(r.get("observation","") or "").strip())
+                and bool(str(r.get("evidence","") or "").strip()))
+
+    if total_main == 0:
+        # flat (no hierarchy) — use sequential unlocking
+        total = len(rows)
+        completed_prefix = next((i for i, r in enumerate(rows) if not _row_complete(r)), total)
+        return {
+            "total":            total,
+            "unlocked":         min(total, completed_prefix + 1) if total > 0 else 0,
+            "completed_prefix": completed_prefix,
+            "completed_any":    sum(1 for r in rows if _row_complete(r)),
+            "total_rows":       total,
+        }
+
+    def _subtree_complete(main_row: Dict[str, Any]) -> bool:
+        """True only when main question AND every sub AND every subsub are answered."""
+        if not _row_complete(main_row): return False
+        main_sr = _norm_parent(main_row.get("sr_no"))
+        if main_sr is None: return False
+        for sub in rows:
+            if str(sub.get("item_level","")).strip() != "sub": continue
+            if _norm_parent(sub.get("parent_order")) != main_sr: continue
+            if not _row_complete(sub): return False
+            sub_sr = _norm_parent(sub.get("sr_no"))
+            if sub_sr is None: continue
+            for ss in rows:
+                if str(ss.get("item_level","")).strip() != "subsub": continue
+                if _norm_parent(ss.get("parent_order")) != sub_sr: continue
+                if not _row_complete(ss): return False
+        return True
+
+    # completed_prefix = consecutive fully-done mains from index 0
+    completed_prefix = 0
+    for mr in main_rows:
+        if _subtree_complete(mr):
+            completed_prefix += 1
+        else:
+            break
+
+    # unlocked = all completed mains + the next one (so next Q is always visible)
+    unlocked_main = min(total_main, completed_prefix + 1)
+    completed_any = sum(1 for mr in main_rows if _subtree_complete(mr))
+
+    return {
+        "total":            total_main,
+        "unlocked":         unlocked_main,
+        "completed_prefix": completed_prefix,
+        "completed_any":    completed_any,
+        "total_rows":       len(rows),
+    }
 
 def save_single_checklist_response(audit_id: str, dept: str, section: str, sr_no: str, observation: str, evidence: str, *, auditor_name: Optional[str] = None, tenant_id: Optional[str] = None) -> Tuple[bool, str]:
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
     sr_no_s = str(sr_no or "").strip()
     if not sr_no_s: return False, "sr_no is required."
-    rows = get_checklist_rows_for_audit_section(audit_id, _normalize_text(dept), _normalize_text(section), tenant_id=tenant_id)
-    idx = next((i for i, r in enumerate(rows) if str(r.get("sr_no", "")).strip() == sr_no_s), None)
+    dept_n, section_n = _normalize_text(dept), _normalize_text(section)
+    rows = get_checklist_rows_for_audit_section(audit_id, dept_n, section_n, tenant_id=tenant_id)
+    idx = next((i for i, r in enumerate(rows) if str(r.get("sr_no","")).strip() == sr_no_s), None)
     if idx is None:
-        try:
-            n = int(sr_no_s)
-            if n <= 0: raise ValueError
-            while len(rows) < n: rows.append({"sr_no": str(len(rows) + 1), "checklist": "", "observation": "", "evidence": ""})
-            idx = n - 1
-        except Exception:
-            return False, "Checklist row not found."
-    rows[idx]["observation"] = str(observation or "").strip()
-    rows[idx]["evidence"] = str(evidence or "").strip()
-    return save_audit_section_table(audit_id=audit_id, dept=dept, section=section, rows=rows, auditor_name=auditor_name, tenant_id=tenant_id)
+        return False, f"Checklist row '{sr_no_s}' not found. Please reload the checklist."
+    # Update only observation/evidence — all hierarchy fields (item_level, parent_order,
+    # checklist text, sr_no) are preserved exactly as loaded from DB/catalog.
+    rows[idx]["observation"]  = str(observation or "").strip()
+    rows[idx]["evidence"]     = str(evidence or "").strip()
+    # Normalize hierarchy fields before writing back (guards against stale None types)
+    rows[idx]["item_level"]   = str(rows[idx].get("item_level","main") or "main").strip() or "main"
+    rows[idx]["parent_order"] = _norm_parent(rows[idx].get("parent_order"))
+    rows[idx]["sr_no"]        = str(rows[idx].get("sr_no","")).strip() or sr_no_s
+    return save_audit_section_table(
+        audit_id=audit_id, dept=dept_n, section=section_n,
+        rows=rows, auditor_name=auditor_name, tenant_id=tenant_id
+    )
 
 def add_audit_section_checklist_item(audit_id: str, dept: str, section: str, checklist_text: str, auditor_name: Optional[str] = None, tenant_id: Optional[str] = None) -> Tuple[bool, str]:
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
@@ -1093,6 +1328,73 @@ def get_audit_calendar(tenant_id: str, audit_id: str) -> Optional[Dict[str, Any]
     row = _fetch_one("select id, title, scope, start_date, end_date, created_by, created_at from audit_calendar where tenant_id=? and id=? limit 1;", (tenant_id, audit_id))
     return dict(row) if row else None
 
+
+def create_recurring_audit_calendar(
+    tenant_id: str,
+    title: str,
+    scope: str,
+    year: int,
+    start_month: int,
+    frequency: str,
+    created_by: str,
+    start_day: int = 1,
+    duration_days: int = 1,
+) -> Tuple[bool, List[Dict[str, Any]], str]:
+    init_db()
+    title = _normalize_text(title)
+    scope = _normalize_text(scope)
+    if not title:
+        return False, [], "Audit title is required."
+    if not scope:
+        return False, [], "Scope is required."
+    try:
+        year = int(year); start_month = int(start_month); start_day = int(start_day); duration_days = int(duration_days)
+    except Exception:
+        return False, [], "Invalid year, month, day, or duration."
+    if year < 2000 or year > 2100:
+        return False, [], "Year is out of supported range."
+    if start_month < 1 or start_month > 12:
+        return False, [], "Start month must be between 1 and 12."
+    if start_day < 1 or start_day > 28:
+        return False, [], "Start day must be between 1 and 28."
+    if duration_days <= 0:
+        return False, [], "Duration must be at least 1 day."
+
+    step_map = {"Monthly": 1, "Bi-monthly": 2, "Quarterly": 3, "Half-yearly": 6, "One-time": 12}
+    step = step_map.get(str(frequency or "").strip(), 1)
+    months = list(range(start_month, 13, step))
+    if str(frequency or "").strip() == "One-time":
+        months = months[:1]
+
+    created_rows: List[Dict[str, Any]] = []
+    errors: List[str] = []
+    for month in months:
+        try:
+            sd = date(year, month, min(start_day, calendar.monthrange(year, month)[1]))
+            ed = sd + timedelta(days=duration_days - 1)
+            occ_title = f"{title} | {calendar.month_name[month]} {year}"
+            row, msg = create_audit_calendar(
+                tenant_id=tenant_id,
+                title=occ_title,
+                scope=scope,
+                start_date=sd.isoformat(),
+                end_date=ed.isoformat(),
+                created_by=created_by,
+            )
+            if row:
+                created_rows.append(row)
+            else:
+                errors.append(msg)
+        except Exception as e:
+            errors.append(str(e))
+
+    if created_rows:
+        msg = f"Created {len(created_rows)} audit(s)."
+        if errors:
+            msg += " Some occurrences failed."
+        return True, created_rows, msg
+    return False, [], errors[0] if errors else "Failed to create recurring audits."
+
 def _is_working_day(d: date) -> bool: return d.weekday() < 5
 
 def _next_working_days(start: date, count: int) -> List[date]:
@@ -1164,33 +1466,157 @@ def get_audit_plan_by_calendar_audit(tenant_id: str, calendar_audit_id: str) -> 
     plan["slots"] = [dict(s) for s in _fetch_all("select id, plan_date, slot_start, slot_end, department, auditor_name, notes from audit_plan_slots where tenant_id=? and plan_id=? order by plan_date asc, slot_start asc;", (tenant_id, plan["plan_id"]))]
     return plan
 
-def create_or_reset_audit_plan(tenant_id: str, calendar_audit_id: str, working_days: int, created_by: str) -> Tuple[Optional[Dict[str, Any]], str]:
+def create_or_reset_audit_plan(
+    tenant_id: str,
+    calendar_audit_id: str,
+    working_days: int,
+    created_by: str,
+    start_date_override: Optional[str] = None,
+    custom_slots: Optional[List[tuple]] = None,
+) -> Tuple[Optional[Dict[str, Any]], str]:
+    """Create or reset an audit plan.
+
+    Args:
+        start_date_override: ISO date string (YYYY-MM-DD). If given, overrides the
+                             calendar audit's start_date so the admin can pick any
+                             date as the first audit day.
+        custom_slots:        List of (slot_start, slot_end) tuples e.g.
+                             [("09:00","10:00"), ("10:00","11:00")].
+                             Falls back to AUDIT_PLAN_SLOTS if None.
+    """
     init_db()
-    if not working_days or int(working_days) <= 0: return None, "Working days must be greater than 0."
+    if not working_days or int(working_days) <= 0:
+        return None, "Duration (days) must be greater than 0."
     audit = get_audit_calendar(tenant_id, calendar_audit_id)
-    if not audit: return None, "Selected audit not found."
-    sd = _parse_iso_date(audit.get("start_date"))
-    if not sd: return None, "Audit Start Date is invalid."
+    if not audit:
+        return None, "Selected audit not found."
+    # Use override date if supplied, else fall back to audit's own start_date
+    raw_date = start_date_override if start_date_override else audit.get("start_date")
+    sd = _parse_iso_date(raw_date)
+    if not sd:
+        return None, "Audit start date is invalid. Please set a valid date."
     working_days = int(working_days)
-    existing = _fetch_one("select plan_id from audit_plans where tenant_id=? and calendar_audit_id=? limit 1;", (tenant_id, calendar_audit_id))
+    slots_to_use = custom_slots if custom_slots else AUDIT_PLAN_SLOTS
+
+    existing = _fetch_one(
+        "select plan_id from audit_plans where tenant_id=? and calendar_audit_id=? limit 1;",
+        (tenant_id, calendar_audit_id))
     if existing:
         plan_id = existing["plan_id"]
-        _execute("update audit_plans set working_days=?, updated_at=? where tenant_id=? and plan_id=?;", (working_days, _now_iso(), tenant_id, plan_id))
+        _execute(
+            "update audit_plans set working_days=?, updated_at=? where tenant_id=? and plan_id=?;",
+            (working_days, _now_iso(), tenant_id, plan_id))
         if "plan_json" in _table_columns("audit_plans"):
-            try: _execute("update audit_plans set plan_json='{}' where tenant_id=? and plan_id=? and (plan_json is null or plan_json='');", (tenant_id, plan_id))
-            except Exception: pass
-        _execute("delete from audit_plan_slots where tenant_id=? and plan_id=?;", (tenant_id, plan_id))
+            try:
+                _execute(
+                    "update audit_plans set plan_json='{}' where tenant_id=? and plan_id=? "
+                    "and (plan_json is null or plan_json='');",
+                    (tenant_id, plan_id))
+            except Exception:
+                pass
+        _execute(
+            "delete from audit_plan_slots where tenant_id=? and plan_id=?;",
+            (tenant_id, plan_id))
     else:
         plan_id = str(uuid.uuid4())
         cols = _table_columns("audit_plans")
         if "plan_json" in cols:
-            _execute("insert into audit_plans (plan_id, tenant_id, calendar_audit_id, working_days, created_by, plan_json) values (?, ?, ?, ?, ?, ?);", (plan_id, tenant_id, calendar_audit_id, working_days, created_by or "", "{}"))
+            _execute(
+                "insert into audit_plans "
+                "(plan_id, tenant_id, calendar_audit_id, working_days, created_by, plan_json) "
+                "values (?, ?, ?, ?, ?, ?);",
+                (plan_id, tenant_id, calendar_audit_id, working_days, created_by or "", "{}"))
         else:
-            _execute("insert into audit_plans (plan_id, tenant_id, calendar_audit_id, working_days, created_by) values (?, ?, ?, ?, ?);", (plan_id, tenant_id, calendar_audit_id, working_days, created_by or ""))
+            _execute(
+                "insert into audit_plans "
+                "(plan_id, tenant_id, calendar_audit_id, working_days, created_by) "
+                "values (?, ?, ?, ?, ?);",
+                (plan_id, tenant_id, calendar_audit_id, working_days, created_by or ""))
+
     for d in _next_working_days(sd, working_days):
-        for s0, s1 in AUDIT_PLAN_SLOTS:
-            _execute("insert into audit_plan_slots (id, tenant_id, plan_id, plan_date, slot_start, slot_end, department, auditor_name, notes) values (?, ?, ?, ?, ?, ?, ?, ?, ?);", (str(uuid.uuid4()), tenant_id, plan_id, d.isoformat(), s0, s1, "", None, None))
+        for s0, s1 in slots_to_use:
+            _execute(
+                "insert into audit_plan_slots "
+                "(id, tenant_id, plan_id, plan_date, slot_start, slot_end, "
+                "department, auditor_name, notes) "
+                "values (?, ?, ?, ?, ?, ?, ?, ?, ?);",
+                (str(uuid.uuid4()), tenant_id, plan_id,
+                 d.isoformat(), s0, s1, "", None, None))
+
     return get_audit_plan_by_calendar_audit(tenant_id, calendar_audit_id), "Audit plan created."
+
+def create_audit_plan_with_dates(
+    tenant_id: str,
+    calendar_audit_id: str,
+    audit_dates: List[str],          # explicit ISO date strings chosen by admin
+    created_by: str,
+    custom_slots: Optional[List[tuple]] = None,
+) -> Tuple[Optional[Dict[str, Any]], str]:
+    """Create or reset an audit plan using a specific list of dates chosen by the admin."""
+    init_db()
+    if not audit_dates:
+        return None, "Please select at least one audit date."
+    audit = get_audit_calendar(tenant_id, calendar_audit_id)
+    if not audit:
+        return None, "Selected audit not found."
+    slots_to_use = custom_slots if custom_slots else AUDIT_PLAN_SLOTS
+
+    # parse & deduplicate dates, keep order
+    parsed_dates = []
+    seen = set()
+    for ds in audit_dates:
+        try:
+            d = date.fromisoformat(str(ds))
+            if d not in seen:
+                seen.add(d)
+                parsed_dates.append(d)
+        except Exception:
+            pass
+    if not parsed_dates:
+        return None, "No valid dates provided."
+    parsed_dates.sort()
+
+    working_days = len(parsed_dates)
+
+    existing = _fetch_one(
+        "select plan_id from audit_plans where tenant_id=? and calendar_audit_id=? limit 1;",
+        (tenant_id, calendar_audit_id))
+    if existing:
+        plan_id = existing["plan_id"]
+        _execute(
+            "update audit_plans set working_days=?, updated_at=? where tenant_id=? and plan_id=?;",
+            (working_days, _now_iso(), tenant_id, plan_id))
+        _execute(
+            "delete from audit_plan_slots where tenant_id=? and plan_id=?;",
+            (tenant_id, plan_id))
+    else:
+        plan_id = str(uuid.uuid4())
+        cols = _table_columns("audit_plans")
+        if "plan_json" in cols:
+            _execute(
+                "insert into audit_plans "
+                "(plan_id, tenant_id, calendar_audit_id, working_days, created_by, plan_json) "
+                "values (?, ?, ?, ?, ?, ?);",
+                (plan_id, tenant_id, calendar_audit_id, working_days, created_by or "", "{}"))
+        else:
+            _execute(
+                "insert into audit_plans "
+                "(plan_id, tenant_id, calendar_audit_id, working_days, created_by) "
+                "values (?, ?, ?, ?, ?);",
+                (plan_id, tenant_id, calendar_audit_id, working_days, created_by or ""))
+
+    for d in parsed_dates:
+        for s0, s1 in slots_to_use:
+            _execute(
+                "insert into audit_plan_slots "
+                "(id, tenant_id, plan_id, plan_date, slot_start, slot_end, "
+                "department, auditor_name, notes) "
+                "values (?, ?, ?, ?, ?, ?, ?, ?, ?);",
+                (str(uuid.uuid4()), tenant_id, plan_id,
+                 d.isoformat(), s0, s1, "", None, None))
+
+    return get_audit_plan_by_calendar_audit(tenant_id, calendar_audit_id), "Audit plan created."
+
 
 def update_audit_plan_slots(tenant_id: str, plan_id: str, slots: List[Dict[str, Any]]) -> Tuple[bool, str]:
     init_db()
