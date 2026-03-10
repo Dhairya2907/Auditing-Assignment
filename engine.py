@@ -187,7 +187,178 @@ def _ensure_column(table: str, col_name: str, col_def_sql: str) -> None:
 
 # ── Schema ────────────────────────────────────────────────────────────────────
 _SCHEMA = _d("eNrFV82S2yAMvucpuMWZyc60505vne210xdgiJETGgxewJvk7Ssgdoj/Jj+73r1sLIEkPn2SYJEbYA6IYxsJRBREaUfgKKyzxIFiCv9nC0IEx8+jI5URJTMnsofTGsVxCc01h6j321UtJamVeKvBr1Gs7Ci9NPrllLnORg4Fq6UjGUe9EyVkS6UPy9VqsfqxWEyEW1swtwTbaNNo/N7hOI2W3aPlO8j3JAsaoUi2ZLwUarlelkyxLRj8xWounDYYtbdRYWBa0dZBkDFrD9pwapl0fbetWjgwzAmtLPpygOaH1+2Y3fXNCEtZ7sQ79Da3OH9/LBsBtZBjkrXArlsgg77QBsRWefyTRStioAADKoeWY5kXa4XuJGB6c2ZzxsFn/JxwoTgcOwkX/EhD0mm04g2E78TXNGU4VMy4Em5j+RBxPorcI3DOCWUCRgJoIr0ZVrsXUlqaM8ek3j6IbDBC/XlHVJJtQH4i9m0AcyXgDNsF+2sc72G1owbeamEQh2jkwSRcsk+HmT6RpQFIO+a+AGOPDUJzTfAeWjdDXYGuUPiRveOCUV8n4b1L+WYaRVUYR3DEgSM8XhxHUWHA7qAZRbMPhDk7WMxGktsouCObYU4/VTHdWf9EtSSmvqBSovdeT7rC6GZkw30oQhp+0vuBdcLJy/XJ5rq6fAWbyNap2umUOP2Hx+ivwusU4uqJH29wAyuigg7UYgjMMVfb8bG0Od0+skI7qIHyAOv5rAYqbdxY/FFLbb0phUtsBjdS247E9w7pMzRibgaeRWokDIuC+6hFPeyxD3co1CHYprYnzEEoqjEKBIM7NK7N6RNxmTpUkpjnblFTFWEh9w+LgVeDg5LiowKnw9CbI6jDpvtm/rrxuE48zNXO8t0+4Vgf32u+vbyQn0/8+f2vQjFJfoPy7zfg5G+sW5KVOD7FS2AZ+fPrdfW0swkebRv3tPDhUNME8RCZHu1hti6Dh5FSE3y0G0upD2g0vvKG11S8wGNJWjE3/ACOVOHjF55vsVDCqrQ7NqLzcWciakhU0+QvjB3J5BVt77F8zhebNH5JKlr/D90QWS8=")
-_SCHEMA_PG = _d("eNrFWNuS2jAMfecr/AbM0C/oU7/EI2IBLo6d2k6BdvrvlW3I1aHJ7rJ92mA5knXOsaTsqrAIHpmHvUImD0wbz/AqnXfMowZNfzcrxqSgn1fPKitLsDd2xtuOltMWXhiByR5e17VSrNbyR41hj4ZyYAyrKa7g4JmXJToPZeV/te8LPECtwjuXzXa1/bpaPTlp7dDOOefD2kSxeECLusAm240UW2Y0xVdI0QpwBYiYRwiSz8UaNUy/OGFxZptokZpt1iBKqde7dQkajmjpCWohvbHr7Tb4qCgDo3kTIK6BcxdjBXdASIzCNmbp0YKXRjuK5ZHc5/edwJ3GbqTjUHj5E9ne0HFBj0nwNlG5iLSIWVQB2zT47xoYI6l3TqUWeB1wKsWVR155ejmQEn+3zv6hCoEVWF/iPA2/SxsfoPEJuOZC1Um2A1hndTZs7iyVcrwAD8ocX41cjMbJ4Ri+ZFKwR/UabJvYcwC+w9Ji28dpiSo9t/ijlpaOn5y8GuRWBjyv1CcsZHAbuFsIZACA8u+rdATJbDwrNBUt/pcL3gIxtin8OdTtoyskU2wLeKXCL8MhBLWEg0V3wkdL+OTCPLfSJMA79KWFBYTFTvc5yh+21XeovuNqoeLTm6MC0gNiNnxxbEi4xUf+QvS89KodR1xhqvZXDE6Se3YHBneaf6d8x7toPJFHHdSbJqLMjmTgmTsVD+bB1266R+xvH9A/RI1cRFLuAFisjPVTSSUrd/W+lH4cKB5BGZc3hDKhAtsZ5zP0liTSUVpaWCYxHlBNdXUgpY7QFqlpX7sbcRFv0JQUYuQTncLY20Tyz07eQe6T5pdn8ndYhKk8M3J7LDlN5DSo5wb2aI4vLevGu0fEXSfCnAJVnM4dtYxBnK2cI+rwKUKqPkgNit/vyKtJ+NCL7uoynm9CnFJM1jGlzIUipa+W/J5KHAgUxSvw+U+xlJyYbvkHUO6uvLgzUz8eljscMwQQ2XoUtFYJE3T25LDE850LeOq8JSyI7csX9i3gTnQr1AIsAy1YpUBrqY//rmLNay+WYNsq+yWg6ZnDjkXNoWknPRsdd8LyYTKf20Ma9Ia9pDEs7CmBt1QNwtMrR5fm5P0hKedrkNGky4uxZ9IckXPL/6PlGT8x33FNaHjZrH//WW/fNstXAvKFINMtRrjMF0Mkb6SEuPoGGXCnzOs7Q09m0+SnJO6bn7nKX8yQCo93esJGkC/7enxMvL3/B9IGdP0B/JHb1DdLymjXHn7XOewy6hNh8bHPfjI06H1d/QX2qvL5")
+_SCHEMA_PG = """
+-- Core tables
+create table if not exists tenants (
+  id text primary key,
+  tenant_code text not null unique,
+  name text not null,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists users (
+  id text primary key,
+  tenant_id text not null references tenants(id) on delete cascade,
+  username text not null,
+  role text not null check (role in ('admin','manager','auditor')),
+  person_name text,
+  password_salt text not null,
+  password_iterations integer not null,
+  password_hash text not null,
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  unique (tenant_id, username)
+);
+create index if not exists idx_users_tenant on users(tenant_id);
+
+create table if not exists departments (
+  id text primary key,
+  tenant_id text not null references tenants(id) on delete cascade,
+  name text not null,
+  created_at timestamptz not null default now(),
+  unique (tenant_id, name)
+);
+create index if not exists idx_departments_tenant on departments(tenant_id);
+
+create table if not exists skills_catalog (
+  id text primary key,
+  tenant_id text not null references tenants(id) on delete cascade,
+  skill_key text not null,
+  skill_label text not null,
+  created_at timestamptz not null default now(),
+  unique (tenant_id, skill_key)
+);
+create index if not exists idx_skills_tenant on skills_catalog(tenant_id);
+
+create table if not exists dept_required_skills (
+  id text primary key,
+  tenant_id text not null references tenants(id) on delete cascade,
+  department_name text not null,
+  skill_key text not null,
+  unique (tenant_id, department_name, skill_key)
+);
+create index if not exists idx_deptreq_tenant on dept_required_skills(tenant_id);
+
+create table if not exists people (
+  id text primary key,
+  tenant_id text not null references tenants(id) on delete cascade,
+  name text not null,
+  department text not null,
+  level text not null check (level in ('experienced','fresher')),
+  is_active boolean not null default true,
+  created_at timestamptz not null default now(),
+  unique (tenant_id, name)
+);
+create index if not exists idx_people_tenant on people(tenant_id);
+
+create table if not exists person_skills (
+  id text primary key,
+  tenant_id text not null references tenants(id) on delete cascade,
+  person_name text not null,
+  skill_key text not null,
+  unique (tenant_id, person_name, skill_key)
+);
+create index if not exists idx_personskills_tenant on person_skills(tenant_id);
+
+create table if not exists audits (
+  audit_id text primary key,
+  tenant_id text not null references tenants(id) on delete cascade,
+  title text,
+  scope text,
+  audited_department text not null,
+  required_skills_json text not null default '[]',
+  assigned_auditor text not null,
+  auditor_level text not null default '',
+  status text not null,
+  created_by text not null,
+  created_at timestamptz not null default now(),
+  due_date text,
+  reports_json text not null default '[]',
+  report_submitted_at timestamptz,
+  closed_at timestamptz,
+  checklists_json text not null default '{}',
+  checklist_extras_json text not null default '{}',
+  plan_slot_notes text
+);
+create index if not exists idx_audits_tenant on audits(tenant_id);
+
+create table if not exists audit_state (
+  tenant_id text primary key references tenants(id) on delete cascade,
+  busy_by_name_json text not null default '{}',
+  audit_history_json text not null default '[]'
+);
+
+create table if not exists checklists_catalog (
+  id text primary key,
+  tenant_id text not null references tenants(id) on delete cascade,
+  department text not null,
+  section text not null,
+  item_order integer not null,
+  item_text text not null,
+  item_level text not null default 'main',
+  parent_order integer,
+  unique (tenant_id, department, section, item_order)
+);
+create index if not exists idx_chk_tenant on checklists_catalog(tenant_id);
+
+create table if not exists generated_final_reports (
+  id text primary key,
+  tenant_id text not null references tenants(id) on delete cascade,
+  created_by text not null,
+  created_at timestamptz not null default now(),
+  summary text not null,
+  audit_ids_json text not null,
+  allowed_users_json text not null,
+  pdf_rel_path text not null,
+  is_deleted boolean not null default false,
+  deleted_at timestamptz,
+  deleted_by text
+);
+create index if not exists idx_finalreports_tenant on generated_final_reports(tenant_id);
+create index if not exists idx_finalreports_createdat on generated_final_reports(created_at);
+
+-- Audit calendar & planning tables
+create table if not exists audit_calendar (
+  id text primary key,
+  tenant_id text not null references tenants(id) on delete cascade,
+  title text not null,
+  scope text not null,
+  start_date text not null,
+  end_date text not null,
+  created_by text not null,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_audit_calendar_tenant on audit_calendar(tenant_id);
+
+create table if not exists audit_plans (
+  plan_id text primary key,
+  tenant_id text not null references tenants(id) on delete cascade,
+  calendar_audit_id text not null references audit_calendar(id) on delete cascade,
+  working_days integer not null,
+  created_by text not null,
+  plan_json text not null default '{}',
+  created_at timestamptz not null default now(),
+  updated_at timestamptz,
+  unique (tenant_id, calendar_audit_id)
+);
+create index if not exists idx_audit_plans_tenant on audit_plans(tenant_id);
+
+create table if not exists audit_plan_slots (
+  id text primary key,
+  tenant_id text not null references tenants(id) on delete cascade,
+  plan_id text not null references audit_plans(plan_id) on delete cascade,
+  plan_date text not null,
+  slot_start text not null,
+  slot_end text not null,
+  department text not null,
+  auditor_name text,
+  notes text,
+  audit_id text,
+  unique (tenant_id, plan_id, plan_date, slot_start)
+);
+create index if not exists idx_audit_plan_slots_tenant on audit_plan_slots(tenant_id);
+create index if not exists idx_audit_plan_slots_plan on audit_plan_slots(plan_id);
+"""
 
 def _repair_audit_plan_schema() -> None:
     if USE_POSTGRES: return
@@ -246,11 +417,31 @@ def _repair_audit_plan_schema() -> None:
     _executescript(script)
 
 def init_db() -> None:
-    _executescript(_SCHEMA_PG if USE_POSTGRES else _SCHEMA)
+    if USE_POSTGRES:
+        # _SCHEMA_PG is now a plain SQL string, execute each statement
+        stmts = [s.strip() for s in _SCHEMA_PG.split(";") if s.strip() and not s.strip().startswith("--")]
+        for st in stmts:
+            try: _execute(st + ";")
+            except Exception: pass
+    else:
+        _executescript(_SCHEMA)
     migrate_db()
 
 def migrate_db() -> None:
-    if USE_POSTGRES: return
+    if USE_POSTGRES:
+        # Ensure extra columns exist on Postgres too (idempotent)
+        for tbl, col, defn in [
+            ("audits", "auditor_level",          "text not null default ''"),
+            ("audits", "checklists_json",         "text not null default '{}'"),
+            ("audits", "checklist_extras_json",   "text not null default '{}'"),
+            ("audits", "plan_slot_notes",         "text"),
+            ("checklists_catalog", "item_level",  "text not null default 'main'"),
+            ("checklists_catalog", "parent_order","integer"),
+            ("audit_plan_slots",   "audit_id",    "text"),
+        ]:
+            try: _ensure_column(tbl, col, defn)
+            except Exception: pass
+        return
     _executescript("""
         create table if not exists audit_calendar (
           id text primary key, tenant_id text not null, title text not null, scope text not null,
@@ -280,10 +471,20 @@ def migrate_db() -> None:
     """)
     try: _repair_audit_plan_schema()
     except Exception: pass
+    # audit_plan_slots extra column
     try: _ensure_column("audit_plan_slots", "audit_id", "text")
     except Exception: pass
-    # Hierarchy support for checklists
-    try: _ensure_column("checklists_catalog", "item_level", "text not null default 'main'")
+    # audits extra columns
+    try: _ensure_column("audits", "auditor_level",        "text not null default ''")
+    except Exception: pass
+    try: _ensure_column("audits", "checklists_json",       "text not null default '{}'")
+    except Exception: pass
+    try: _ensure_column("audits", "checklist_extras_json", "text not null default '{}'")
+    except Exception: pass
+    try: _ensure_column("audits", "plan_slot_notes",       "text")
+    except Exception: pass
+    # checklist hierarchy support
+    try: _ensure_column("checklists_catalog", "item_level",   "text not null default 'main'")
     except Exception: pass
     try: _ensure_column("checklists_catalog", "parent_order", "integer")
     except Exception: pass
@@ -307,75 +508,7 @@ def _ensure_state_row(tenant_id: str) -> None:
     if not _fetch_one("select tenant_id from audit_state where tenant_id = ?;", (tenant_id,)):
         _execute("insert into audit_state (tenant_id, busy_by_name_json, audit_history_json) values (?, ?, ?);", (tenant_id, json.dumps({}), json.dumps([])))
 
-def _seed_checklists_if_empty(tenant_id: str) -> None:
-    if _fetch_one("select id from checklists_catalog where tenant_id = ? limit 1;", (tenant_id,)): return
-    seed = {
-        "HR": {
-            "Resource Planning": ["Has top management determined the need for resources and documented it?","Was the Resource Plan prepared as per the decided time period?","Were process owners involved in preparing the Resource Plan?","Is there evidence of consultation with Top Management and MR?","Is the Resource Plan reviewed during Management Review Meetings (MRM) and documented?"],
-            "Pre-Boarding & Onboarding": ["Are pre-boarding details completed by the process owner for selected candidates?","Is the Employee Boarding Checklist used and completed?","Are education, experience, and training records collected and maintained?","Is the Employee Master List updated after joining?"],
-            "Job Roles, Responsibilities & Communication": ["Are job roles, authorities, and responsibilities documented in Job Roles, Tasks, Competency Profile?","Has top management communicated job roles and responsibilities?","Is acknowledgement of JD communication recorded?"],
-            "Competency & Skill Management": ["Are employee skills identified within 7 days of joining?","Is the Skill Matrix available and updated?","Is the Skill Matrix reviewed as per the decided time period?","Are improvements in skills documented and updated?"],
-            "Exit Management": ["Are exit formalities maintained for employees leaving the organization?","Is employee list updated post-exit?"],
-            "Training Planning": ["Has top management planned training for all employees and documented them?","Is a Training List maintained and used to select training topics?","Is the Training planning documented as per the time period?","Are planned trainings communicated to employees?"],
-            "Conduct of Trainings": ["Are trainings conducted as per the approved Training Plan?","Are email or documented communications available as evidence?"],
-            "Evaluation of Trainings": ["Is training effectiveness evaluated upon completion?","Is evaluation documented appropriately?","Are appropriate evaluation methods selected?"],
-        },
-        "MR": {
-            "General Requirements": ["Does top management conduct management reviews at planned intervals?","Is MRM plan documented","Is the management review procedure defined and implemented?","Are management review records maintained","Is MRM notice sent acknowledged by respective personnel and is it documented?","Is the MRM attendance documented?"],
-            "Management Review Inputs": ["Results of internal and external audits","Customer feedback (including complaints)","Process performance and product conformity","Status of preventive and corrective actions","Follow-up actions from previous management reviews","Changes that could affect the QMS (regulatory, organizational, product-related)","Recommendations for improvement","New or revised regulatory requirements applicable to medical devices","Resource needs (human, infrastructure, work environment)"],
-            "Conduct of Management Review": ["Is the management review chaired or attended by top management?","Are relevant process owners involved as required?","Are discussions aligned with the planned agenda?"],
-            "Management Review Outputs": ["Improvement of the effectiveness of the QMS","Improvement of product-related processes","Improvement of medical device safety and performance","Resource requirements","Actions addressing identified risks","Responsibilities and timelines assigned for actions"],
-            "Follow-up & Records": ["Is the effectiveness of previous actions reviewed in subsequent MRMs?","Are management review minutes legible, dated, and approved?"],
-        },
-        
-"Production": {
-    "BMR": [
-        {"item_text": "Are the following details available – batch number, manufacturing start and completion date?", "item_level": "main", "parent_order": None},
-        {"item_text": "Are raw material lot numbers mentioned?", "item_level": "sub", "parent_order": 1},
-        {"item_text": "Check for the Certificate of Analysis (COA) of the Raw Materials", "item_level": "subsub", "parent_order": 2},
-        {"item_text": "Does the COA give test names, specified and achieved results", "item_level": "subsub", "parent_order": 2},
-        {"item_text": "Check the Quality Assurance Plan (QAP)", "item_level": "sub", "parent_order": 1},
-        {"item_text": "Does the QAP give details such test stage, test name, method, sample size, acceptance criteria?", "item_level": "subsub", "parent_order": 5},
 
-        {"item_text": "Are the quantities produced and rejected mentioned in the BMR?", "item_level": "main", "parent_order": None},
-        {"item_text": "Is a NCR form filled out in case of rejections?", "item_level": "sub", "parent_order": 7},
-        {"item_text": "Is the NCR report approved by the designated authority?", "item_level": "subsub", "parent_order": 8},
-
-        {"item_text": "Are the instrument IDs mentioned in the BMR?", "item_level": "main", "parent_order": None},
-        {"item_text": "Check the calibration log and report of the instruments.", "item_level": "sub", "parent_order": 10},
-        {"item_text": "Do the calibration reports mention name of an accredited lab", "item_level": "subsub", "parent_order": 11},
-        {"item_text": "Do the calibration reports mention traceability to national or international standards?", "item_level": "subsub", "parent_order": 11},
-    ],
-},
-        "Purchase": {
-            "Supplier Selection": ["Is supplier selection initiated when a new material, component, or service is required?","Does the Purchase Department identify potential suppliers?","Are supplier identification sources documented","Are suppliers evaluated based on defined selection criteria?","Are suppliers categorized on risk based approach?"],
-            "Supplier Evaluation & Approval": ["Is Supplier Assessment completed for potential suppliers","Is the completed assessment reviewed","Are suppliers evaluated and scored as per defined criteria?","Are approved suppliers included in Approved Supplier List","For critical suppliers, is Supplier Quality Agreement executed before approval?"],
-            "Control of Outsourced Processes": ["Are outsourced processes assigned only to approved suppliers?","Is verification of certificates and reports from outsourced activities carried out?"],
-            "Purchase Order Control": ["Is supplier verification against the Approved Supplier List performed before PO issuance?","Is Supplier Selection & Evaluation initiated if the supplier is not approved","Are POs reviewed and approved by authorized personnel?","Are PO records maintained?"],
-            "Verification of Purchased Product": ["Is Incoming Inspection conducted as per approved procedure or specifications?","Are inspection results documented?","Are inspection outcomes (acceptance/rejection/deviation/concession) linked to the supplier?","Are non-conforming items recorded","Are inspection results used for supplier performance monitoring"],
-            "Supplier Performance Evaluation": ["Is supplier performance evaluated based on defined parameters?","Are suppliers classified according to defined rating scale?","Are suppliers evaluated as per defined time period?","Are supplier audits conducted when required?","Is SCAR issued to the suppliers when required?","Are supplier ratings reviewed in Management Review Meetings?"],
-            "Supplier Re-evaluation": ["Is re-evaluation initiated based on performance monitoring results?","Are re-evaluation outcomes documented?"],
-        },
-    }
-    
-    for dept, sections in seed.items():
-        for section, items in sections.items():
-            for i, item in enumerate(items, start=1):
-                # Support both legacy string items and hierarchical dict items:
-                # {item_text, item_level ('main'|'sub'|'subsub'), parent_order (int|None)}
-                if isinstance(item, dict):
-                    txt = str(item.get("item_text", "") or "").strip()
-                    lvl = str(item.get("item_level", "main") or "main").strip()
-                    parent = item.get("parent_order")
-                    _execute(
-                        "insert into checklists_catalog (id, tenant_id, department, section, item_order, item_text, item_level, parent_order) values (?, ?, ?, ?, ?, ?, ?, ?);",
-                        (_uuid(), tenant_id, dept, section, i, txt, lvl, parent)
-                    )
-                else:
-                    _execute(
-                        "insert into checklists_catalog (id, tenant_id, department, section, item_order, item_text) values (?, ?, ?, ?, ?, ?);",
-                        (_uuid(), tenant_id, dept, section, i, item)
-                    )
 def ensure_seed_files(tenant_code: str = "", tenant_name: str = "") -> str:
     init_db(); ensure_dirs()
     tenant_code = _normalize_text(tenant_code).lower() or DEFAULT_TENANT_CODE
@@ -384,8 +517,6 @@ def ensure_seed_files(tenant_code: str = "", tenant_name: str = "") -> str:
     for d in DEFAULT_DEPARTMENTS: add_department_to_catalog(d, tenant_id=tenant_id)
     for k, v in DEFAULT_SKILLS.items(): ensure_skill_key_exists(k, fallback_label=v, tenant_id=tenant_id)
     for dept, keys in DEFAULT_DEPT_REQUIRED_SKILLS.items(): set_dept_required_skills(dept, keys, tenant_id=tenant_id)
-    _seed_checklists_if_empty(tenant_id)
-    _upgrade_seed_bmr_hierarchy_if_needed(tenant_id)
     _ensure_state_row(tenant_id)
     if not _fetch_one("select id from users where tenant_id = ? limit 1;", (tenant_id,)):
         admin_pw = make_password_record("admin123")
@@ -484,40 +615,122 @@ def get_checklist_catalog(tenant_id: Optional[str] = None) -> Dict[str, Dict[str
         out.setdefault(_normalize_text(r["department"]), {}).setdefault(_normalize_text(r["section"]), []).append(str(r["item_text"]))
     return out
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# HARDCODED CHECKLIST CATALOG
+# All checklist questions live here in code — NOT in the database.
+# Structure: { "Department": { "Section": [ {item_order, item_text, item_level, parent_order} ] } }
+# item_level: "main" = visible to auditor as top-level question
+#             "sub"  = sub-question under a main (revealed after main is selected)
+# parent_order: item_order of the parent main question (None for main questions)
+# ═══════════════════════════════════════════════════════════════════════════════
+CHECKLIST_CATALOG: Dict[str, Dict[str, List[Dict[str, Any]]]] = {
+    "Production": {
+        "BMR": [
+            # Q1 — no sub-questions
+            {"item_order": 1,  "item_text": "Are the following details available – batch number, manufacturing start and completion date?", "item_level": "main", "parent_order": None},
+            # Q2 — 4 sub-questions
+            {"item_order": 2,  "item_text": "Are raw material lot numbers mentioned?",                                                       "item_level": "main", "parent_order": None},
+            {"item_order": 3,  "item_text": "Check for the Certificate of Analysis (COA) of the Raw Materials",                             "item_level": "sub",  "parent_order": 2},
+            {"item_order": 4,  "item_text": "Does the COA give test names, specified and achieved results",                                  "item_level": "sub",  "parent_order": 2},
+            {"item_order": 5,  "item_text": "Check the Quality Assurance Plan (QAP)",                                                        "item_level": "sub",  "parent_order": 2},
+            {"item_order": 6,  "item_text": "Does the QAP give details such as test stage, test name, method, sample size, acceptance criteria?", "item_level": "sub", "parent_order": 2},
+            # Q3 — 2 sub-questions
+            {"item_order": 7,  "item_text": "Are the quantities produced and rejected mentioned in the BMR?",                                "item_level": "main", "parent_order": None},
+            {"item_order": 8,  "item_text": "Is a NCR form filled out in case of rejections?",                                              "item_level": "sub",  "parent_order": 7},
+            {"item_order": 9,  "item_text": "Is the NCR report approved by the designated authority?",                                      "item_level": "sub",  "parent_order": 7},
+            # Q4 — 3 sub-questions
+            {"item_order": 10, "item_text": "Are the instrument IDs mentioned in the BMR?",                                                  "item_level": "main", "parent_order": None},
+            {"item_order": 11, "item_text": "Check the calibration log and report of the instruments.",                                     "item_level": "sub",  "parent_order": 10},
+            {"item_order": 12, "item_text": "Do the calibration reports mention name of an accredited lab",                                  "item_level": "sub",  "parent_order": 10},
+            {"item_order": 13, "item_text": "Do the calibration reports mention traceability to national or international standards?",       "item_level": "sub",  "parent_order": 10},
+        ],
+    },
+    "HR": {
+        "Resource Planning":                  [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Has top management determined the need for resources and documented it?","Was the Resource Plan prepared as per the decided time period?","Were process owners involved in preparing the Resource Plan?","Is there evidence of consultation with Top Management and MR?","Is the Resource Plan reviewed during Management Review Meetings (MRM) and documented?"])],
+        "Pre-Boarding & Onboarding":          [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Are pre-boarding details completed by the process owner for selected candidates?","Is the Employee Boarding Checklist used and completed?","Are education, experience, and training records collected and maintained?","Is the Employee Master List updated after joining?"])],
+        "Job Roles, Responsibilities & Communication": [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Are job roles, authorities, and responsibilities documented in Job Roles, Tasks, Competency Profile?","Has top management communicated job roles and responsibilities?","Is acknowledgement of JD communication recorded?"])],
+        "Competency & Skill Management":      [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Are employee skills identified within 7 days of joining?","Is the Skill Matrix available and updated?","Is the Skill Matrix reviewed as per the decided time period?","Are improvements in skills documented and updated?"])],
+        "Exit Management":                    [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Are exit formalities maintained for employees leaving the organization?","Is employee list updated post-exit?"])],
+        "Training Planning":                  [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Has top management planned training for all employees and documented them?","Is a Training List maintained and used to select training topics?","Is the Training planning documented as per the time period?","Are planned trainings communicated to employees?"])],
+        "Conduct of Trainings":               [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Are trainings conducted as per the approved Training Plan?","Are email or documented communications available as evidence?"])],
+        "Evaluation of Trainings":            [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Is training effectiveness evaluated upon completion?","Is evaluation documented appropriately?","Are appropriate evaluation methods selected?"])],
+    },
+    "MR": {
+        "General Requirements":       [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Does top management conduct management reviews at planned intervals?","Is MRM plan documented","Is the management review procedure defined and implemented?","Are management review records maintained","Is MRM notice sent acknowledged by respective personnel and is it documented?","Is the MRM attendance documented?"])],
+        "Management Review Inputs":   [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Results of internal and external audits","Customer feedback (including complaints)","Process performance and product conformity","Status of preventive and corrective actions","Follow-up actions from previous management reviews","Changes that could affect the QMS (regulatory, organizational, product-related)","Recommendations for improvement","New or revised regulatory requirements applicable to medical devices","Resource needs (human, infrastructure, work environment)"])],
+        "Conduct of Management Review": [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Is the management review chaired or attended by top management?","Are relevant process owners involved as required?","Are discussions aligned with the planned agenda?"])],
+        "Management Review Outputs":  [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Improvement of the effectiveness of the QMS","Improvement of product-related processes","Improvement of medical device safety and performance","Resource requirements","Actions addressing identified risks","Responsibilities and timelines assigned for actions"])],
+        "Follow-up & Records":        [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Is the effectiveness of previous actions reviewed in subsequent MRMs?","Are management review minutes legible, dated, and approved?"])],
+    },
+    "Purchase": {
+        "Supplier Selection":             [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Is supplier selection initiated when a new material, component, or service is required?","Does the Purchase Department identify potential suppliers?","Are supplier identification sources documented","Are suppliers evaluated based on defined selection criteria?","Are suppliers categorized on risk based approach?"])],
+        "Supplier Evaluation & Approval": [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Is Supplier Assessment completed for potential suppliers","Is the completed assessment reviewed","Are suppliers evaluated and scored as per defined criteria?","Are approved suppliers included in Approved Supplier List","For critical suppliers, is Supplier Quality Agreement executed before approval?"])],
+        "Control of Outsourced Processes":[{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Are outsourced processes assigned only to approved suppliers?","Is verification of certificates and reports from outsourced activities carried out?"])],
+        "Purchase Order Control":         [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Is supplier verification against the Approved Supplier List performed before PO issuance?","Is Supplier Selection & Evaluation initiated if the supplier is not approved","Are POs reviewed and approved by authorized personnel?","Are PO records maintained?"])],
+        "Verification of Purchased Product": [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Is Incoming Inspection conducted as per approved procedure or specifications?","Are inspection results documented?","Are inspection outcomes (acceptance/rejection/deviation/concession) linked to the supplier?","Are non-conforming items recorded","Are inspection results used for supplier performance monitoring"])],
+        "Supplier Performance Evaluation":[{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Is supplier performance evaluated based on defined parameters?","Are suppliers classified according to defined rating scale?","Are suppliers evaluated as per defined time period?","Are supplier audits conducted when required?","Is SCAR issued to the suppliers when required?","Are supplier ratings reviewed in Management Review Meetings?"])],
+        "Supplier Re-evaluation":         [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Is re-evaluation initiated based on performance monitoring results?","Are re-evaluation outcomes documented?"])],
+    },
+}
+
+def _catalog_key(s: str) -> str:
+    """Normalize department/section name for catalog lookup (case-insensitive)."""
+    return " ".join(str(s or "").strip().split()).lower()
+
 def get_sections_for_department(dept: str, tenant_id: Optional[str] = None) -> List[str]:
-    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
-    return [str(r["section"]) for r in _fetch_all("select section from checklists_catalog where tenant_id = ? and department = ? group by section order by lower(section);", (tenant_id, _normalize_text(dept)))]
+    """Return sections for a department — reads from hardcoded catalog first, DB as fallback."""
+    key = _catalog_key(dept)
+    # Check hardcoded catalog
+    for cat_dept, sections in CHECKLIST_CATALOG.items():
+        if _catalog_key(cat_dept) == key:
+            return list(sections.keys())
+    # Fallback: DB (for admin-added custom sections)
+    try:
+        tid = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+        return [str(r["section"]) for r in _fetch_all(
+            "select section from checklists_catalog where tenant_id = ? and department = ? group by section order by lower(section);",
+            (tid, _normalize_text(dept)))]
+    except Exception:
+        return []
 
 def get_items_for_department_section(dept: str, section: str, tenant_id: Optional[str] = None) -> List[str]:
-    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
-    return [str(r["item_text"]) for r in _fetch_all("select item_text from checklists_catalog where tenant_id = ? and department = ? and section = ? order by item_order;", (tenant_id, _normalize_text(dept), _normalize_text(section)))]
+    """Return flat list of item texts — reads from hardcoded catalog first, DB as fallback."""
+    items = get_hierarchical_items_for_section(dept, section, tenant_id=tenant_id)
+    return [i["item_text"] for i in items]
 
 def get_hierarchical_items_for_section(dept: str, section: str, tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
-    """Return items with level ('main','sub','subsub') and parent_order for tree rendering."""
-    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
-    rows = _fetch_all(
-        "select item_order, item_text, item_level, parent_order from checklists_catalog "
-        "where tenant_id = ? and department = ? and section = ? order by item_order;",
-        (tenant_id, _normalize_text(dept), _normalize_text(section))
-    )
-    result = []
-    for r in rows:
-        result.append({
-            "item_order": int(r["item_order"] or 0),
-            "item_text": str(r["item_text"] or "").strip(),
-            "item_level": str(r["item_level"] or "main").strip(),
-            "parent_order": int(r["parent_order"]) if r["parent_order"] is not None else None,
-        })
-    return result
+    """Return items with hierarchy — reads from hardcoded catalog first, DB as fallback."""
+    dept_key    = _catalog_key(dept)
+    section_key = _catalog_key(section)
+    # Check hardcoded catalog
+    for cat_dept, sections in CHECKLIST_CATALOG.items():
+        if _catalog_key(cat_dept) == dept_key:
+            for cat_sec, items in sections.items():
+                if _catalog_key(cat_sec) == section_key:
+                    return [dict(i) for i in items]
+    # Fallback: DB (for admin-added custom sections)
+    try:
+        tid = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+        rows = _fetch_all(
+            "select item_order, item_text, item_level, parent_order from checklists_catalog "
+            "where tenant_id = ? and department = ? and section = ? order by item_order;",
+            (tid, _normalize_text(dept), _normalize_text(section))
+        )
+        return [{"item_order": int(r["item_order"] or 0), "item_text": str(r["item_text"] or "").strip(),
+                 "item_level": str(r["item_level"] or "main").strip(),
+                 "parent_order": int(r["parent_order"]) if r["parent_order"] is not None else None}
+                for r in rows]
+    except Exception:
+        return []
 
 def upsert_section_items_hierarchical(dept: str, section: str, items: List[Dict[str, Any]], tenant_id: Optional[str] = None) -> None:
-    """Save hierarchical items. Each item dict: {item_text, item_level, parent_order}."""
+    """Save hierarchical items to DB (used only for admin-added custom sections)."""
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
     dept, section = _normalize_text(dept), _normalize_text(section)
     if not dept or not section: return
     _execute("delete from checklists_catalog where tenant_id = ? and department = ? and section = ?;", (tenant_id, dept, section))
     for idx, item in enumerate([i for i in (items or []) if str(i.get("item_text","")).strip()], start=1):
-        txt = str(item.get("item_text","")).strip()
+        txt   = str(item.get("item_text","")).strip()
         level = str(item.get("item_level","main")).strip() or "main"
         parent = item.get("parent_order")
         _execute(
@@ -526,42 +739,6 @@ def upsert_section_items_hierarchical(dept: str, section: str, items: List[Dict[
         )
 
 
-def _upgrade_seed_bmr_hierarchy_if_needed(tenant_id: str) -> None:
-    """If Production → BMR is still a flat (all-main) list, rewrite it so ONLY 3 mains exist (1,2,3) and the rest are sub/subsub."""
-    try:
-        dept = _normalize_text("Production")
-        section = _normalize_text("BMR")
-        rows = _fetch_all(
-            "select item_order, item_text, coalesce(item_level,'') as item_level, parent_order from checklists_catalog "
-            "where tenant_id = ? and department = ? and section = ? order by item_order;",
-            (tenant_id, dept, section),
-        )
-        if not rows:
-            return
-        # If already hierarchical, do nothing.
-        if any(str(r.get("item_level") or "").strip() in ("sub", "subsub") for r in rows):
-            return
-
-        items = [
-            {"item_text": "Are the following details available – batch number, manufacturing start and completion date?", "item_level": "main", "parent_order": None},
-            {"item_text": "Are raw material lot numbers mentioned?", "item_level": "sub", "parent_order": 1},
-            {"item_text": "Check for the Certificate of Analysis (COA) of the Raw Materials", "item_level": "subsub", "parent_order": 2},
-            {"item_text": "Does the COA give test names, specified and achieved results", "item_level": "subsub", "parent_order": 2},
-            {"item_text": "Check the Quality Assurance Plan (QAP)", "item_level": "sub", "parent_order": 1},
-            {"item_text": "Does the QAP give details such test stage, test name, method, sample size, acceptance criteria?", "item_level": "subsub", "parent_order": 5},
-
-            {"item_text": "Are the quantities produced and rejected mentioned in the BMR?", "item_level": "main", "parent_order": None},
-            {"item_text": "Is a NCR form filled out in case of rejections?", "item_level": "sub", "parent_order": 7},
-            {"item_text": "Is the NCR report approved by the designated authority?", "item_level": "subsub", "parent_order": 8},
-
-            {"item_text": "Are the instrument IDs mentioned in the BMR?", "item_level": "main", "parent_order": None},
-            {"item_text": "Check the calibration log and report of the instruments.", "item_level": "sub", "parent_order": 10},
-            {"item_text": "Do the calibration reports mention name of an accredited lab", "item_level": "subsub", "parent_order": 11},
-            {"item_text": "Do the calibration reports mention traceability to national or international standards?", "item_level": "subsub", "parent_order": 11},
-        ]
-        upsert_section_items_hierarchical("Production", "BMR", items, tenant_id=tenant_id)
-    except Exception:
-        return
 
 def upsert_section_items(dept: str, section: str, items: List[str], tenant_id: Optional[str] = None) -> None:
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
@@ -794,7 +971,25 @@ def unlock_auditor(state: Dict[str, Any], auditor_name: str) -> None:
 
 # ── Audits ────────────────────────────────────────────────────────────────────
 def _row_to_audit(r: Dict[str, Any]) -> Dict[str, Any]:
-    return {"audit_id": r["audit_id"], "title": r["title"] or "", "scope": r["scope"] or "", "audited_department": r["audited_department"], "required_skills": json.loads(r["required_skills_json"] or "[]"), "assigned_auditor": r["assigned_auditor"], "auditor_level": r["auditor_level"], "status": r["status"], "created_by": r["created_by"], "created_at": r["created_at"], "due_date": r["due_date"] or "", "reports": json.loads(r["reports_json"] or "[]"), "report_submitted_at": r["report_submitted_at"] or "", "closed_at": r["closed_at"] or "", "checklists": json.loads(r["checklists_json"] or "{}")}
+    return {
+        "audit_id":            r["audit_id"],
+        "title":               r["title"] or "",
+        "scope":               r["scope"] or "",
+        "audited_department":  r["audited_department"],
+        "required_skills":     json.loads(r["required_skills_json"] or "[]"),
+        "assigned_auditor":    r["assigned_auditor"],
+        "auditor_level":       r.get("auditor_level") or "",
+        "status":              r["status"],
+        "created_by":          r["created_by"],
+        "created_at":          str(r["created_at"] or ""),
+        "due_date":            r["due_date"] or "",
+        "reports":             json.loads(r["reports_json"] or "[]"),
+        "report_submitted_at": str(r["report_submitted_at"] or ""),
+        "closed_at":           str(r["closed_at"] or ""),
+        "checklists":          json.loads(r.get("checklists_json") or "{}"),
+        "checklist_extras":    json.loads(r.get("checklist_extras_json") or "{}"),
+        "plan_slot_notes":     r.get("plan_slot_notes") or "",
+    }
 
 def load_audits(tenant_id: Optional[str] = None) -> Dict[str, Any]:
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
@@ -813,17 +1008,36 @@ def get_audit(audit_id: str, tenant_id: Optional[str] = None) -> Optional[Dict[s
 
 def _save_updated_audit(updated: Dict[str, Any], tenant_id: Optional[str] = None) -> None:
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
-    rsk_json = json.dumps(updated.get("required_skills", []) or [])
-    rep_json = json.dumps(updated.get("reports", []) or [])
-    chk_json = json.dumps(updated.get("checklists", {}) or {})
-    aid = updated.get("audit_id", "")
-    exists = _fetch_one("select audit_id from audits where tenant_id = ? and audit_id = ?;", (tenant_id, aid))
+    rsk_json  = json.dumps(updated.get("required_skills", []) or [])
+    rep_json  = json.dumps(updated.get("reports", []) or [])
+    chk_json  = json.dumps(updated.get("checklists", {}) or {})
+    ext_json  = json.dumps(updated.get("checklist_extras", {}) or {})
+    notes     = updated.get("plan_slot_notes") or None
+    aid       = updated.get("audit_id", "")
+    exists    = _fetch_one("select audit_id from audits where tenant_id = ? and audit_id = ?;", (tenant_id, aid))
     if exists:
-        _execute("update audits set title=?,scope=?,audited_department=?,required_skills_json=?,assigned_auditor=?,auditor_level=?,status=?,created_by=?,created_at=?,due_date=?,reports_json=?,report_submitted_at=?,closed_at=?,checklists_json=? where audit_id=? and tenant_id=?;",
-            (updated.get("title",""), updated.get("scope",""), updated.get("audited_department",""), rsk_json, updated.get("assigned_auditor",""), updated.get("auditor_level",""), updated.get("status",""), updated.get("created_by",""), updated.get("created_at",_now_iso()), updated.get("due_date",""), rep_json, updated.get("report_submitted_at",""), updated.get("closed_at",""), chk_json, aid, tenant_id))
+        _execute(
+            "update audits set title=?,scope=?,audited_department=?,required_skills_json=?,"
+            "assigned_auditor=?,auditor_level=?,status=?,created_by=?,created_at=?,due_date=?,"
+            "reports_json=?,report_submitted_at=?,closed_at=?,checklists_json=?,"
+            "checklist_extras_json=?,plan_slot_notes=? where audit_id=? and tenant_id=?;",
+            (updated.get("title",""), updated.get("scope",""), updated.get("audited_department",""),
+             rsk_json, updated.get("assigned_auditor",""), updated.get("auditor_level",""),
+             updated.get("status",""), updated.get("created_by",""), updated.get("created_at",_now_iso()),
+             updated.get("due_date",""), rep_json, updated.get("report_submitted_at","") or None,
+             updated.get("closed_at","") or None, chk_json, ext_json, notes, aid, tenant_id))
     else:
-        _execute("insert into audits (audit_id,tenant_id,title,scope,audited_department,required_skills_json,assigned_auditor,auditor_level,status,created_by,created_at,due_date,reports_json,report_submitted_at,closed_at,checklists_json) values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);",
-            (aid or _new_audit_id(), tenant_id, updated.get("title",""), updated.get("scope",""), updated.get("audited_department",""), rsk_json, updated.get("assigned_auditor",""), updated.get("auditor_level",""), updated.get("status","Assigned"), updated.get("created_by",""), updated.get("created_at",_now_iso()), updated.get("due_date",""), rep_json, updated.get("report_submitted_at",""), updated.get("closed_at",""), chk_json))
+        _execute(
+            "insert into audits (audit_id,tenant_id,title,scope,audited_department,required_skills_json,"
+            "assigned_auditor,auditor_level,status,created_by,created_at,due_date,reports_json,"
+            "report_submitted_at,closed_at,checklists_json,checklist_extras_json,plan_slot_notes) "
+            "values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);",
+            (aid or _new_audit_id(), tenant_id, updated.get("title",""), updated.get("scope",""),
+             updated.get("audited_department",""), rsk_json, updated.get("assigned_auditor",""),
+             updated.get("auditor_level",""), updated.get("status","Assigned"), updated.get("created_by",""),
+             updated.get("created_at",_now_iso()), updated.get("due_date",""), rep_json,
+             updated.get("report_submitted_at","") or None, updated.get("closed_at","") or None,
+             chk_json, ext_json, notes))
 
 def save_updated_audit(updated: Dict[str, Any], tenant_id: Optional[str] = None) -> None:
     _save_updated_audit(updated, tenant_id=tenant_id)
@@ -1056,73 +1270,60 @@ def _norm_parent(val) -> Optional[int]:
         return None
 
 def get_checklist_rows_for_audit_section(audit_id: str, dept: str, section: str, *, tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    """
+    Always use the hardcoded catalog as the source of truth for structure
+    (item_level, parent_order, sr_no). Saved answers (observation/evidence)
+    are merged in by matching sr_no first, then falling back to text match.
+    """
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+
+    # ── Get canonical structure from catalog ──────────────────────────────────
+    hier_items = get_hierarchical_items_for_section(
+        _normalize_text(dept), _normalize_text(section), tenant_id=tenant_id)
+
+    # ── Build answer lookup from saved data (keyed by sr_no AND by text) ──────
     saved = load_audit_section_table(audit_id, dept, section, tenant_id=tenant_id)
-        
+    ans_by_srno: Dict[str, Dict[str, str]] = {}
+    ans_by_text: Dict[str, Dict[str, str]] = {}
     if saved and isinstance(saved, list):
-        out: List[Dict[str, Any]] = []
-        missing_hierarchy = False
-        for idx, r in enumerate(saved, start=1):
-            # sr_no must never be empty — fall back to enumerate index
-            sr = str(r.get("sr_no", "")).strip() or str(idx)
-            item_level = r.get("item_level")
-            parent_order = r.get("parent_order")
-            if item_level is None and parent_order is None:
-                missing_hierarchy = True
-            out.append({
-                "sr_no":        sr,
-                "checklist":    str(r.get("checklist", "")).strip(),
-                "observation":  str(r.get("observation", "") or "").strip(),
-                "evidence":     str(r.get("evidence", "") or "").strip(),
-                "item_level":   str(r.get("item_level", "main") or "main").strip() or "main",
-                "parent_order": _norm_parent(r.get("parent_order")),
-            })
-    
-        # If the saved table is older (no hierarchy fields), rebuild it from the latest
-        # hierarchical catalog for this dept/section; keep existing observations/evidence.
-        if missing_hierarchy:
-            hier_items = get_hierarchical_items_for_section(_normalize_text(dept), _normalize_text(section), tenant_id=tenant_id)
-            if hier_items:
-                # Map old answers by checklist text (best-effort)
-                ans_map = {}
-                for r in out:
-                    key = " ".join(str(r.get("checklist", "")).split()).lower()
-                    if key:
-                        ans_map[key] = {"observation": r.get("observation", ""), "evidence": r.get("evidence", "")}
-    
-                rebuilt: List[Dict[str, Any]] = []
-                for it in hier_items:
-                    txt = str(it.get("item_text", "")).strip()
-                    key = " ".join(txt.split()).lower()
-                    prev = ans_map.get(key, {})
-                    rebuilt.append({
-                        "sr_no":        str(it.get("item_order")),
-                        "checklist":    txt,
-                        "observation":  str(prev.get("observation", "") or "").strip(),
-                        "evidence":     str(prev.get("evidence", "") or "").strip(),
-                        "item_level":   str(it.get("item_level", "main") or "main").strip() or "main",
-                        "parent_order": _norm_parent(it.get("parent_order")),
-                    })
-                return rebuilt
-    
-        return out
-    hier_items = get_hierarchical_items_for_section(_normalize_text(dept), _normalize_text(section), tenant_id=tenant_id)
+        for r in saved:
+            obs = str(r.get("observation", "") or "").strip()
+            ev  = str(r.get("evidence",    "") or "").strip()
+            sr  = str(r.get("sr_no", "") or "").strip()
+            txt = " ".join(str(r.get("checklist", "") or "").split()).lower()
+            if sr:  ans_by_srno[sr]  = {"observation": obs, "evidence": ev}
+            if txt: ans_by_text[txt] = {"observation": obs, "evidence": ev}
+
+    # ── Merge: structure from catalog + answers from saved ────────────────────
     if hier_items:
+        result = []
+        for item in hier_items:
+            sr  = str(item["item_order"])
+            txt = " ".join(str(item.get("item_text","")).split()).lower()
+            # prefer match by sr_no, fallback to text
+            prev = ans_by_srno.get(sr) or ans_by_text.get(txt) or {}
+            result.append({
+                "sr_no":        sr,
+                "checklist":    str(item["item_text"] or "").strip(),
+                "observation":  str(prev.get("observation", "") or "").strip(),
+                "evidence":     str(prev.get("evidence",    "") or "").strip(),
+                "item_level":   str(item.get("item_level", "main") or "main").strip() or "main",
+                "parent_order": _norm_parent(item.get("parent_order")),
+            })
+        return result
+
+    # ── Fallback: if no catalog entry, use raw saved data ────────────────────
+    if saved and isinstance(saved, list):
         return [{
-            "sr_no":        str(item["item_order"]),
-            "checklist":    str(item["item_text"] or "").strip(),
-            "observation":  "",
-            "evidence":     "",
-            "item_level":   str(item["item_level"] or "main").strip() or "main",
-            "parent_order": _norm_parent(item["parent_order"]),
-        } for item in hier_items]
-    # flat fallback (legacy sections with no hierarchy)
-    items = get_items_for_department_section(_normalize_text(dept), _normalize_text(section), tenant_id=tenant_id) or []
-    return [{
-        "sr_no": str(i), "checklist": str(item).strip(),
-        "observation": "", "evidence": "",
-        "item_level": "main", "parent_order": None,
-    } for i, item in enumerate(items, start=1)]
+            "sr_no":        str(r.get("sr_no", str(i))),
+            "checklist":    str(r.get("checklist", "") or "").strip(),
+            "observation":  str(r.get("observation", "") or "").strip(),
+            "evidence":     str(r.get("evidence",    "") or "").strip(),
+            "item_level":   str(r.get("item_level", "main") or "main").strip() or "main",
+            "parent_order": _norm_parent(r.get("parent_order")),
+        } for i, r in enumerate(saved, start=1)]
+
+    return []
 
 def get_checklist_progress(audit_id: str, dept: str, section: str, *, tenant_id: Optional[str] = None) -> Dict[str, int]:
     rows = get_checklist_rows_for_audit_section(audit_id, dept, section, tenant_id=tenant_id)
@@ -1306,6 +1507,20 @@ AUDIT_PLAN_SLOTS = [("09:30","10:30"),("10:30","11:30"),("11:30","12:30"),("12:3
 def list_audit_calendar(tenant_id: str) -> List[Dict[str, Any]]:
     init_db()
     return [dict(r) for r in _fetch_all("select id, title, scope, start_date, end_date, created_by, created_at from audit_calendar where tenant_id = ? order by start_date asc;", (tenant_id,))]
+
+def list_all_plan_dates(tenant_id: str) -> List[Dict[str, Any]]:
+    """Return all distinct plan_dates from audit_plan_slots for this tenant,
+    joined with the calendar audit title so the calendar can highlight them."""
+    init_db()
+    rows = _fetch_all(
+        "select distinct aps.plan_date, ac.title, ac.id as calendar_audit_id "
+        "from audit_plan_slots aps "
+        "join audit_plans ap on ap.plan_id = aps.plan_id and ap.tenant_id = aps.tenant_id "
+        "join audit_calendar ac on ac.id = ap.calendar_audit_id and ac.tenant_id = aps.tenant_id "
+        "where aps.tenant_id = ? "
+        "order by aps.plan_date asc;",
+        (tenant_id,))
+    return [dict(r) for r in rows]
 
 def create_audit_calendar(tenant_id: str, title: str, scope: str, start_date: str, end_date: str, created_by: str) -> Tuple[Optional[Dict[str, Any]], str]:
     init_db()
