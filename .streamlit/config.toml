@@ -1,6 +1,23 @@
+[server]
+headless = true
+port = 10000
+enableCORS = false
+enableXsrfProtection = false
+maxUploadSize = 10
+
+[browser]
+gatherUsageStats = false
+
+[client]
+showErrorDetails = false
+toolbarMode = "minimal"
+
+[runner]
+fastReruns = true
+
 [theme]
-base="light"
-backgroundColor="#f4f6f9"
-secondaryBackgroundColor="#ffffff"
-textColor="#0f172a"
-primaryColor="#1e3a8a"
+base = "light"
+backgroundColor = "#f4f6f9"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#0f172a"
+primaryColor = "#10b981"
