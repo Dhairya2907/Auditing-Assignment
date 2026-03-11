@@ -21,3 +21,9 @@ backgroundColor = "#f4f6f9"
 secondaryBackgroundColor = "#ffffff"
 textColor = "#0f172a"
 primaryColor = "#10b981"
+
+[client]
+showErrorDetails = "full"
+
+[server]
+headless = true
