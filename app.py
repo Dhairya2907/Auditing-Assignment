@@ -435,6 +435,24 @@ def inject_enterprise_css():
     .ck-node-sub{background:#f0fdf9;border:1px solid #a7f3d0;border-radius:10px;padding:14px 16px;margin-bottom:8px;margin-left:24px;}
     .ck-badge{background:#ecfdf5;color:#065f46;border:1px solid #a7f3d0;border-radius:999px;padding:2px 10px;font-size:11px;font-weight:700;}
     .subtle{font-size:12px;color:#64748b;}
+    /* Hide "Press Enter to submit form" tooltip everywhere */
+    [data-testid="InputInstructions"]{display:none!important;visibility:hidden!important;}
+
+    /* ── Multiselect tags — light teal/green, readable text ── */
+    span[data-baseweb="tag"]{
+        background:#e6fdf4 !important;
+        border:1px solid #6ee7b7 !important;
+        border-radius:8px !important;
+        padding:3px 8px !important;
+    }
+    span[data-baseweb="tag"] span{
+        color:#065f46 !important;
+        font-weight:600 !important;
+        font-size:12px !important;
+    }
+    span[data-baseweb="tag"] svg{
+        fill:#10b981 !important;
+    }
     </style>""", unsafe_allow_html=True)
 
 def inject_theme_overrides():
@@ -662,7 +680,7 @@ def _clear_caches_and_rerun():
 # ── Auth helpers ──────────────────────────────────────────────────────────────
 def logout():
     st.session_state.auth = {"logged_in": False, "tenant_code": "default", "tenant_id": None, "username": None, "role": None, "person_name": None}
-    st.rerun()
+    st.session_state["_do_rerun"] = True
 
 def require_login():
     if not st.session_state.auth["logged_in"]:
@@ -965,6 +983,13 @@ if not st.session_state.auth["logged_in"]:
     div[data-testid="stForm"]{
         background:transparent!important;border:none!important;
         box-shadow:none!important;padding:0!important;
+    }
+    /* Hide "Press Enter to submit form" tooltip */
+    .stTextInput [data-testid="InputInstructions"],
+    .stTextInput ~ [data-testid="InputInstructions"],
+    small[data-testid="InputInstructions"],
+    [data-testid="InputInstructions"]{
+        display:none!important;visibility:hidden!important;opacity:0!important;
     }
 
     /* Credentials */
@@ -1881,6 +1906,8 @@ with st.sidebar:
     )
     st.button("⏋  Logout", on_click=logout, use_container_width=True)
     st.markdown('<div class="sb-divider"></div>', unsafe_allow_html=True)
+    if st.session_state.pop("_do_rerun", False):
+        st.rerun()
 
 # ── Page functions ────────────────────────────────────────────────────────────
 def page_admin_dashboard():
@@ -2948,10 +2975,26 @@ def page_reports():
 
             admin_summaries_by_audit_id = {}
 
+            # Build a lookup: audit_id -> audit object for display
+            _eligible_map = {a["audit_id"]: a for a in eligible_audits}
+
             for aid in selected_ids:
-                st.markdown(f"**Summary for audit `{aid}`**")
+                _a       = _eligible_map.get(aid, {})
+                _title   = _a.get("title") or "Untitled Audit"
+                _auditor = _a.get("assigned_auditor") or "Unassigned"
+                _dept    = _a.get("audited_department") or ""
+                _dept_str = f" &nbsp;·&nbsp; {_dept}" if _dept else ""
+                st.markdown(
+                    f'<div style="margin:18px 0 6px;">'
+                    f'<span style="font-size:15px;font-weight:700;color:#0f172a;">{_title}</span>'
+                    f'<span style="font-size:12px;color:#64748b;margin-left:10px;">'
+                    f'&#128100; {_auditor}{_dept_str}</span>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
                 admin_summaries_by_audit_id[aid] = st.text_area(
                     label="",
+                    placeholder='Enter summary for this audit...',
                     key=f"summary_{aid}",
                     height=120,
                 )
