@@ -1,5 +1,7 @@
-streamlit
-psycopg2-binary
-reportlab
-pandas
-python-dotenv
+streamlit==1.55.0
+pandas==2.3.3
+numpy==2.4.3
+sqlalchemy==2.0.48
+psycopg2-binary==2.9.11
+python-dotenv==1.2.2
+reportlab==4.4.10
