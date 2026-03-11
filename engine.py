@@ -674,8 +674,8 @@ CHECKLIST_CATALOG: Dict[str, Dict[str, List[Dict[str, Any]]]] = {
 }
 
 def _catalog_key(s: str) -> str:
-    """Normalize department/section name for catalog lookup (case-insensitive)."""
-    return " ".join(str(s or "").strip().split()).lower()
+    """Normalize department/section name for catalog lookup."""
+    return " ".join(str(s or "").strip().split())
 
 def get_sections_for_department(dept: str, tenant_id: Optional[str] = None) -> List[str]:
     """Return sections for a department — reads from hardcoded catalog first, DB as fallback."""
@@ -1270,60 +1270,73 @@ def _norm_parent(val) -> Optional[int]:
         return None
 
 def get_checklist_rows_for_audit_section(audit_id: str, dept: str, section: str, *, tenant_id: Optional[str] = None) -> List[Dict[str, Any]]:
-    """
-    Always use the hardcoded catalog as the source of truth for structure
-    (item_level, parent_order, sr_no). Saved answers (observation/evidence)
-    are merged in by matching sr_no first, then falling back to text match.
-    """
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
-
-    # ── Get canonical structure from catalog ──────────────────────────────────
-    hier_items = get_hierarchical_items_for_section(
-        _normalize_text(dept), _normalize_text(section), tenant_id=tenant_id)
-
-    # ── Build answer lookup from saved data (keyed by sr_no AND by text) ──────
     saved = load_audit_section_table(audit_id, dept, section, tenant_id=tenant_id)
-    ans_by_srno: Dict[str, Dict[str, str]] = {}
-    ans_by_text: Dict[str, Dict[str, str]] = {}
+        
     if saved and isinstance(saved, list):
-        for r in saved:
-            obs = str(r.get("observation", "") or "").strip()
-            ev  = str(r.get("evidence",    "") or "").strip()
-            sr  = str(r.get("sr_no", "") or "").strip()
-            txt = " ".join(str(r.get("checklist", "") or "").split()).lower()
-            if sr:  ans_by_srno[sr]  = {"observation": obs, "evidence": ev}
-            if txt: ans_by_text[txt] = {"observation": obs, "evidence": ev}
-
-    # ── Merge: structure from catalog + answers from saved ────────────────────
-    if hier_items:
-        result = []
-        for item in hier_items:
-            sr  = str(item["item_order"])
-            txt = " ".join(str(item.get("item_text","")).split()).lower()
-            # prefer match by sr_no, fallback to text
-            prev = ans_by_srno.get(sr) or ans_by_text.get(txt) or {}
-            result.append({
+        out: List[Dict[str, Any]] = []
+        missing_hierarchy = False
+        for idx, r in enumerate(saved, start=1):
+            # sr_no must never be empty — fall back to enumerate index
+            sr = str(r.get("sr_no", "")).strip() or str(idx)
+            item_level = r.get("item_level")
+            parent_order = r.get("parent_order")
+            if item_level is None and parent_order is None:
+                missing_hierarchy = True
+            out.append({
                 "sr_no":        sr,
-                "checklist":    str(item["item_text"] or "").strip(),
-                "observation":  str(prev.get("observation", "") or "").strip(),
-                "evidence":     str(prev.get("evidence",    "") or "").strip(),
-                "item_level":   str(item.get("item_level", "main") or "main").strip() or "main",
-                "parent_order": _norm_parent(item.get("parent_order")),
+                "checklist":    str(r.get("checklist", "")).strip(),
+                "observation":  str(r.get("observation", "") or "").strip(),
+                "evidence":     str(r.get("evidence", "") or "").strip(),
+                "item_level":   str(r.get("item_level", "main") or "main").strip() or "main",
+                "parent_order": _norm_parent(r.get("parent_order")),
             })
-        return result
-
-    # ── Fallback: if no catalog entry, use raw saved data ────────────────────
-    if saved and isinstance(saved, list):
+    
+        # If the saved table is older (no hierarchy fields), rebuild it from the latest
+        # hierarchical catalog for this dept/section; keep existing observations/evidence.
+        if missing_hierarchy:
+            hier_items = get_hierarchical_items_for_section(_normalize_text(dept), _normalize_text(section), tenant_id=tenant_id)
+            if hier_items:
+                # Map old answers by checklist text (best-effort)
+                ans_map = {}
+                for r in out:
+                    key = " ".join(str(r.get("checklist", "")).split()).lower()
+                    if key:
+                        ans_map[key] = {"observation": r.get("observation", ""), "evidence": r.get("evidence", "")}
+    
+                rebuilt: List[Dict[str, Any]] = []
+                for it in hier_items:
+                    txt = str(it.get("item_text", "")).strip()
+                    key = " ".join(txt.split()).lower()
+                    prev = ans_map.get(key, {})
+                    rebuilt.append({
+                        "sr_no":        str(it.get("item_order")),
+                        "checklist":    txt,
+                        "observation":  str(prev.get("observation", "") or "").strip(),
+                        "evidence":     str(prev.get("evidence", "") or "").strip(),
+                        "item_level":   str(it.get("item_level", "main") or "main").strip() or "main",
+                        "parent_order": _norm_parent(it.get("parent_order")),
+                    })
+                return rebuilt
+    
+        return out
+    hier_items = get_hierarchical_items_for_section(_normalize_text(dept), _normalize_text(section), tenant_id=tenant_id)
+    if hier_items:
         return [{
-            "sr_no":        str(r.get("sr_no", str(i))),
-            "checklist":    str(r.get("checklist", "") or "").strip(),
-            "observation":  str(r.get("observation", "") or "").strip(),
-            "evidence":     str(r.get("evidence",    "") or "").strip(),
-            "item_level":   str(r.get("item_level", "main") or "main").strip() or "main",
-            "parent_order": _norm_parent(r.get("parent_order")),
-        } for i, r in enumerate(saved, start=1)]
-
-    return []
+            "sr_no":        str(item["item_order"]),
+            "checklist":    str(item["item_text"] or "").strip(),
+            "observation":  "",
+            "evidence":     "",
+            "item_level":   str(item["item_level"] or "main").strip() or "main",
+            "parent_order": _norm_parent(item["parent_order"]),
+        } for item in hier_items]
+    # flat fallback (legacy sections with no hierarchy)
+    items = get_items_for_department_section(_normalize_text(dept), _normalize_text(section), tenant_id=tenant_id) or []
+    return [{
+        "sr_no": str(i), "checklist": str(item).strip(),
+        "observation": "", "evidence": "",
+        "item_level": "main", "parent_order": None,
+    } for i, item in enumerate(items, start=1)]
 
 def get_checklist_progress(audit_id: str, dept: str, section: str, *, tenant_id: Optional[str] = None) -> Dict[str, int]:
     rows = get_checklist_rows_for_audit_section(audit_id, dept, section, tenant_id=tenant_id)
