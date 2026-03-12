@@ -45,9 +45,14 @@ def _rerun() -> None:
 
 # ── CSS helpers ───────────────────────────────────────────────────────────────
 def inject_enterprise_css():
+    # Load Google Fonts via <link> (non-blocking) instead of CSS @import (render-blocking)
+    st.markdown(
+        '<link rel="preconnect" href="https://fonts.googleapis.com">'
+        '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>'
+        '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,600;0,700;1,600;1,700&family=Inter:wght@300;400;500;600;700&display=swap">',
+        unsafe_allow_html=True,
+    )
     st.markdown("""<style>
-    @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,600;0,700;1,600;1,700&family=Inter:wght@300;400;500;600;700&display=swap');
-
     /* ── Global ── */
     html, body, [class*="css"] { font-family: 'Inter', sans-serif !important; }
     .stApp { background: #f0f2f7 !important; }
@@ -645,15 +650,15 @@ def _cached_list_audit_calendar(tenant_id):
     except TypeError:
         return _engine_call("list_audit_calendar")
 
-@st.cache_data(show_spinner=False, ttl=60)
+@st.cache_data(show_spinner=False, ttl=300)
 def _cached_departments_catalog(tenant_id):
     return _engine_call("load_departments_catalog", tenant_id=tenant_id) or []
 
-@st.cache_data(show_spinner=False, ttl=60)
+@st.cache_data(show_spinner=False, ttl=300)
 def _cached_skills_catalog(tenant_id):
     return _engine_call("load_skills_catalog", tenant_id=tenant_id) or {}
 
-@st.cache_data(show_spinner=False, ttl=60)
+@st.cache_data(show_spinner=False, ttl=120)
 def _cached_people(tenant_id):
     return _engine_call("list_people_records", tenant_id=tenant_id) or []
 
@@ -661,15 +666,15 @@ def _cached_people(tenant_id):
 def _cached_state(tenant_id):
     return _engine_call("load_state", tenant_id=tenant_id) or {}
 
-@st.cache_data(show_spinner=False, ttl=60)
+@st.cache_data(show_spinner=False, ttl=300)
 def _cached_sections_for_dept(tenant_id, dept: str):
     return _engine_call("get_sections_for_department", dept, tenant_id=tenant_id) or []
 
-@st.cache_data(show_spinner=False, ttl=60)
+@st.cache_data(show_spinner=False, ttl=300)
 def _cached_items_for_section(tenant_id, dept: str, section: str):
     return _engine_call("get_items_for_department_section", dept, section, tenant_id=tenant_id) or []
 
-@st.cache_data(show_spinner=False, ttl=60)
+@st.cache_data(show_spinner=False, ttl=300)
 def _cached_timetable_schedule():
     return (timetable.load_schedule() if _HAS_TIMETABLE and timetable else {}) or {"days": {}}
 
@@ -785,7 +790,6 @@ def audits_table(audits: List[Dict], *, search_query: str = ""):
 # ── Login page ────────────────────────────────────────────────────────────────
 if not st.session_state.auth["logged_in"]:
     st.markdown("""<style>
-    @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,600;0,700;1,600;1,700&family=Inter:wght@300;400;500;600;700&display=swap');
     html,[class*="css"]{font-family:'Inter',sans-serif!important;}
 
     .stApp{
@@ -2088,9 +2092,15 @@ def page_admin_dashboard():
 
     # ── Quick Actions ─────────────────────────────────────────────────────────
     qa1, qa2, qa3, qa4 = st.columns([1,1,1,3])
-    qa1.button("＋ Create Audit",      key="db_qa_create",  use_container_width=True, type="primary")
-    qa2.button("📅 Audit Plan",         key="db_qa_plan",    use_container_width=True)
-    qa3.button("📄 Generate PDF",       key="db_qa_pdf",     use_container_width=True)
+    if qa1.button("📅 Audit Calendar",  key="db_qa_create",  use_container_width=True, type="primary"):
+        st.session_state["_nav_to"] = "Audit Calender"
+        st.rerun()
+    if qa2.button("🗓 Audit Plan",       key="db_qa_plan",    use_container_width=True):
+        st.session_state["_nav_to"] = "Audit Plan"
+        st.rerun()
+    if qa3.button("📊 Final Reports",   key="db_qa_pdf",     use_container_width=True):
+        st.session_state["_nav_to"] = "Reports"
+        st.rerun()
 
     # ── KPI Cards ─────────────────────────────────────────────────────────────
     st.markdown('<div class="db-section-title">Audit Portfolio</div>', unsafe_allow_html=True)

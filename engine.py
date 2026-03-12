@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import os, re, json, uuid, hashlib, hmac, sqlite3, base64, zlib, calendar
+import os, re, json, uuid, hashlib, hmac, sqlite3, base64, zlib, calendar, threading
 def _d(s:str)->str: return zlib.decompress(base64.b64decode(s)).decode('utf-8')
 
 try:
@@ -121,69 +121,113 @@ def _ph() -> str: return "%s" if USE_POSTGRES else "?"
 def _sql(q: str) -> str: return q.replace("?", "%s") if USE_POSTGRES else q
 def _placeholders(n: int) -> str: return ",".join([_ph()] * int(n))
 
-def _connect():
-    if USE_POSTGRES:
-        if psycopg2 is None:
-            raise RuntimeError("Postgres requested but psycopg2 is not installed. Add psycopg2-binary to requirements.txt.")
-        conn = psycopg2.connect(_pg_url_with_ssl(DATABASE_URL), connect_timeout=15)
-        conn.autocommit = True
+# ── Connection pooling ────────────────────────────────────────────────────────
+# SQLite: one persistent connection per thread (avoids open/close per query)
+_sqlite_local = threading.local()
+
+def _get_sqlite_conn():
+    conn = getattr(_sqlite_local, "conn", None)
+    if conn is not None:
         return conn
     ensure_dirs()
     conn = sqlite3.connect(SQLITE_DB_PATH, timeout=30, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    for pragma in ["PRAGMA journal_mode=WAL;", "PRAGMA synchronous=NORMAL;", "PRAGMA foreign_keys=ON;", "PRAGMA busy_timeout=30000;"]:
+    for pragma in [
+        "PRAGMA journal_mode=WAL;",
+        "PRAGMA synchronous=NORMAL;",
+        "PRAGMA foreign_keys=ON;",
+        "PRAGMA busy_timeout=30000;",
+        "PRAGMA cache_size=-8000;",   # 8 MB page cache
+        "PRAGMA temp_store=MEMORY;",
+    ]:
         conn.execute(pragma)
+    _sqlite_local.conn = conn
     return conn
+
+# Postgres: simple thread-local connection (psycopg2 pool optional)
+_pg_local = threading.local()
+
+def _get_pg_conn():
+    conn = getattr(_pg_local, "conn", None)
+    if conn is not None:
+        try:
+            conn.cursor().execute("SELECT 1")
+            return conn
+        except Exception:
+            pass
+    if psycopg2 is None:
+        raise RuntimeError("Postgres requested but psycopg2 is not installed. Add psycopg2-binary to requirements.txt.")
+    conn = psycopg2.connect(_pg_url_with_ssl(DATABASE_URL), connect_timeout=15)
+    conn.autocommit = True
+    _pg_local.conn = conn
+    return conn
+
+def _connect():
+    if USE_POSTGRES:
+        return _get_pg_conn()
+    return _get_sqlite_conn()
 
 def _fetch_one(sql: str, params: Tuple[Any, ...] = ()) -> Optional[Dict[str, Any]]:
     q = _sql(sql)
-    with _connect() as conn:
-        if USE_POSTGRES:
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute(q, params)
-                row = cur.fetchone()
-                return dict(row) if row else None
-        row = conn.execute(q, params).fetchone()
-        return dict(row) if row else None
+    conn = _connect()
+    if USE_POSTGRES:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(q, params)
+            row = cur.fetchone()
+            return dict(row) if row else None
+    row = conn.execute(q, params).fetchone()
+    return dict(row) if row else None
 
 def _fetch_all(sql: str, params: Tuple[Any, ...] = ()) -> List[Dict[str, Any]]:
     q = _sql(sql)
-    with _connect() as conn:
-        if USE_POSTGRES:
-            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute(q, params)
-                return [dict(r) for r in cur.fetchall()]
-        return [dict(r) for r in conn.execute(q, params).fetchall()]
+    conn = _connect()
+    if USE_POSTGRES:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(q, params)
+            return [dict(r) for r in cur.fetchall()]
+    return [dict(r) for r in conn.execute(q, params).fetchall()]
 
 def _execute(sql: str, params: Tuple[Any, ...] = ()) -> int:
     q = _sql(sql)
-    with _connect() as conn:
-        if USE_POSTGRES:
-            with conn.cursor() as cur:
-                cur.execute(q, params)
-                return cur.rowcount
-        return conn.execute(q, params).rowcount
+    conn = _connect()
+    if USE_POSTGRES:
+        with conn.cursor() as cur:
+            cur.execute(q, params)
+            return cur.rowcount
+    cur = conn.execute(q, params)
+    conn.commit()
+    return cur.rowcount
 
 def _executescript(script: str) -> None:
     if not script or not str(script).strip(): return
     if not USE_POSTGRES:
-        with _connect() as conn: conn.executescript(script)
+        _get_sqlite_conn().executescript(script)
         return
     statements = [s.strip() for s in str(script).split(";") if s.strip()]
-    with _connect() as conn:
-        with conn.cursor() as cur:
-            for st in statements: cur.execute(st)
+    conn = _connect()
+    with conn.cursor() as cur:
+        for st in statements: cur.execute(st)
+
+_table_columns_cache: Dict[str, Set[str]] = {}
 
 def _table_columns(table: str) -> Set[str]:
+    if table in _table_columns_cache:
+        return _table_columns_cache[table]
     if USE_POSTGRES:
         rows = _fetch_all("select column_name as name from information_schema.columns where table_schema='public' and table_name = ?", (table,))
     else:
         rows = _fetch_all(f"PRAGMA table_info({table})", ())
-    return {str(r.get("name")) for r in rows if r.get("name")}
+    cols = {str(r.get("name")) for r in rows if r.get("name")}
+    _table_columns_cache[table] = cols
+    return cols
+
+def _invalidate_table_columns_cache(table: str) -> None:
+    _table_columns_cache.pop(table, None)
 
 def _ensure_column(table: str, col_name: str, col_def_sql: str) -> None:
     if col_name not in _table_columns(table):
         _execute(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_def_sql}")
+        _invalidate_table_columns_cache(table)
 
 # ── Schema ────────────────────────────────────────────────────────────────────
 _SCHEMA = _d("eNrFV82S2yAMvucpuMWZyc60505vne210xdgiJETGgxewJvk7Ssgdoj/Jj+73r1sLIEkPn2SYJEbYA6IYxsJRBREaUfgKKyzxIFiCv9nC0IEx8+jI5URJTMnsofTGsVxCc01h6j321UtJamVeKvBr1Gs7Ci9NPrllLnORg4Fq6UjGUe9EyVkS6UPy9VqsfqxWEyEW1swtwTbaNNo/N7hOI2W3aPlO8j3JAsaoUi2ZLwUarlelkyxLRj8xWounDYYtbdRYWBa0dZBkDFrD9pwapl0fbetWjgwzAmtLPpygOaH1+2Y3fXNCEtZ7sQ79Da3OH9/LBsBtZBjkrXArlsgg77QBsRWefyTRStioAADKoeWY5kXa4XuJGB6c2ZzxsFn/JxwoTgcOwkX/EhD0mm04g2E78TXNGU4VMy4Em5j+RBxPorcI3DOCWUCRgJoIr0ZVrsXUlqaM8ek3j6IbDBC/XlHVJJtQH4i9m0AcyXgDNsF+2sc72G1owbeamEQh2jkwSRcsk+HmT6RpQFIO+a+AGOPDUJzTfAeWjdDXYGuUPiRveOCUV8n4b1L+WYaRVUYR3DEgSM8XhxHUWHA7qAZRbMPhDk7WMxGktsouCObYU4/VTHdWf9EtSSmvqBSovdeT7rC6GZkw30oQhp+0vuBdcLJy/XJ5rq6fAWbyNap2umUOP2Hx+ivwusU4uqJH29wAyuigg7UYgjMMVfb8bG0Od0+skI7qIHyAOv5rAYqbdxY/FFLbb0phUtsBjdS247E9w7pMzRibgaeRWokDIuC+6hFPeyxD3co1CHYprYnzEEoqjEKBIM7NK7N6RNxmTpUkpjnblFTFWEh9w+LgVeDg5LiowKnw9CbI6jDpvtm/rrxuE48zNXO8t0+4Vgf32u+vbyQn0/8+f2vQjFJfoPy7zfg5G+sW5KVOD7FS2AZ+fPrdfW0swkebRv3tPDhUNME8RCZHu1hti6Dh5FSE3y0G0upD2g0vvKG11S8wGNJWjE3/ACOVOHjF55vsVDCqrQ7NqLzcWciakhU0+QvjB3J5BVt77F8zhebNH5JKlr/D90QWS8=")
@@ -416,16 +460,25 @@ def _repair_audit_plan_schema() -> None:
     """
     _executescript(script)
 
+_db_initialized = False
+_db_init_lock = threading.Lock()
+
 def init_db() -> None:
-    if USE_POSTGRES:
-        # _SCHEMA_PG is now a plain SQL string, execute each statement
-        stmts = [s.strip() for s in _SCHEMA_PG.split(";") if s.strip() and not s.strip().startswith("--")]
-        for st in stmts:
-            try: _execute(st + ";")
-            except Exception: pass
-    else:
-        _executescript(_SCHEMA)
-    migrate_db()
+    global _db_initialized
+    if _db_initialized:
+        return
+    with _db_init_lock:
+        if _db_initialized:
+            return
+        if USE_POSTGRES:
+            stmts = [s.strip() for s in _SCHEMA_PG.split(";") if s.strip() and not s.strip().startswith("--")]
+            for st in stmts:
+                try: _execute(st + ";")
+                except Exception: pass
+        else:
+            _executescript(_SCHEMA)
+        migrate_db()
+        _db_initialized = True
 
 def migrate_db() -> None:
     if USE_POSTGRES:
