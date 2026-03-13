@@ -2208,9 +2208,38 @@ def page_admin_dashboard():
     )
     st.markdown(aud_table, unsafe_allow_html=True)
 
-    # ── Change Password ───────────────────────────────────────────────────────
+    # ── Security Settings ─────────────────────────────────────────────────────
     st.markdown('<div class="db-section-title">Security</div>', unsafe_allow_html=True)
     st.markdown('<div class="db-pw-box">', unsafe_allow_html=True)
+
+    st.caption("Change your login username. This affects only your account.")
+    current_username = st.session_state.auth.get("username", "")
+    st.text_input("Current username", value=current_username, disabled=True)
+    with st.form("admin_change_username_form"):
+        new_username = st.text_input("New username")
+        username_pw = st.text_input("Current password", type="password", key="admin_username_current_password")
+        submit_username = st.form_submit_button("Update Username", type="primary")
+    if submit_username:
+        if not new_username.strip():
+            st.error("New username is required.")
+        elif new_username.strip().lower() == (current_username or "").strip().lower():
+            st.error("Please enter a different username.")
+        elif not username_pw:
+            st.error("Current password is required.")
+        else:
+            ok, new_uname, msg = engine.change_username(
+                username=current_username,
+                new_username=new_username,
+                current_password=username_pw,
+                tenant_id=st.session_state.auth.get("tenant_id"),
+            )
+            if ok:
+                st.session_state.auth["username"] = new_uname
+                st.success(msg)
+            else:
+                st.error(msg)
+
+    st.write("")
     st.caption("Change your login password. This affects only your account.")
     with st.form("admin_change_password_form"):
         old_pw     = st.text_input("Current password",  type="password")

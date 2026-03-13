@@ -38,7 +38,7 @@ def _parse_iso_date(val) -> Optional[date]:
 
 UPLOADS_DIR = "uploads"
 DEFAULT_TENANT_CODE = os.getenv("DEFAULT_TENANT_CODE", "default")
-DEFAULT_DEPARTMENTS = ["HR", "MR", "Purchase", "Sales and Marketing", "Production"]
+DEFAULT_DEPARTMENTS = ["HR", "MR", "Purchase", "Sales and Marketing", "Production","Quality Assurance", "Maintenance"]
 DEFAULT_SKILLS = {
     "hr_competency_training_requirements": "Understanding of competency and training requirements",
     "hr_review_training_records_effectiveness": "Ability to review training records and effectiveness",
@@ -698,32 +698,67 @@ CHECKLIST_CATALOG: Dict[str, Dict[str, List[Dict[str, Any]]]] = {
             {"item_order": 13, "item_text": "Do the calibration reports mention traceability to national or international standards?",       "item_level": "sub",  "parent_order": 10},
         ],
     },
+  "Purchase": {
+        "Approved Supplier & Incoming Inspection": [
+            # Q1 — main + 2 subs
+            {"item_order": 1, "item_text": "Identify a raw material lot number in the BMR; is the manufacturer of this lot on the Approved Supplier List (ASL)?",                                                                   "item_level": "main", "parent_order": None},
+            {"item_order": 2, "item_text": "If the supplier is on the ASL, is their Qualification Status current (e.g., is their ISO certificate or audit report still valid or supplier evaluation)?",                            "item_level": "sub",  "parent_order": 1},
+            {"item_order": 3, "item_text": "Does the Incoming Inspection Report for this lot show that all 'achieved results' on the CoA were verified against the internal specifications?",                                       "item_level": "sub",  "parent_order": 1},
+        ],
+          },
     "HR": {
-        "Resource Planning":                  [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Has top management determined the need for resources and documented it?","Was the Resource Plan prepared as per the decided time period?","Were process owners involved in preparing the Resource Plan?","Is there evidence of consultation with Top Management and MR?","Is the Resource Plan reviewed during Management Review Meetings (MRM) and documented?"])],
-        "Pre-Boarding & Onboarding":          [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Are pre-boarding details completed by the process owner for selected candidates?","Is the Employee Boarding Checklist used and completed?","Are education, experience, and training records collected and maintained?","Is the Employee Master List updated after joining?"])],
-        "Job Roles, Responsibilities & Communication": [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Are job roles, authorities, and responsibilities documented in Job Roles, Tasks, Competency Profile?","Has top management communicated job roles and responsibilities?","Is acknowledgement of JD communication recorded?"])],
-        "Competency & Skill Management":      [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Are employee skills identified within 7 days of joining?","Is the Skill Matrix available and updated?","Is the Skill Matrix reviewed as per the decided time period?","Are improvements in skills documented and updated?"])],
-        "Exit Management":                    [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Are exit formalities maintained for employees leaving the organization?","Is employee list updated post-exit?"])],
-        "Training Planning":                  [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Has top management planned training for all employees and documented them?","Is a Training List maintained and used to select training topics?","Is the Training planning documented as per the time period?","Are planned trainings communicated to employees?"])],
-        "Conduct of Trainings":               [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Are trainings conducted as per the approved Training Plan?","Are email or documented communications available as evidence?"])],
-        "Evaluation of Trainings":            [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Is training effectiveness evaluated upon completion?","Is evaluation documented appropriately?","Are appropriate evaluation methods selected?"])],
+        "Competency & Training (BMR Audit)": [
+            # Q1 — main + 4 subs
+            {"item_order": 1, "item_text": "For the operator who signed for a critical step (e.g., sterilization), is their name on the Competency Matrix for that process?",                                                       "item_level": "main", "parent_order": None},
+            {"item_order": 2, "item_text": "Confirm that the identified operator is listed in the competency matrix.",                                                                                                             "item_level": "sub",  "parent_order": 1},
+            {"item_order": 3, "item_text": "Verify that the specific process (e.g., sterilization, assembly, inspection) is included in the competency matrix.",                                                                   "item_level": "sub",  "parent_order": 1},
+            {"item_order": 4, "item_text": "Confirm that the operator is marked as competent / authorized for that process.",                                                                                                      "item_level": "sub",  "parent_order": 1},
+            {"item_order": 5, "item_text": "Verify the date of competency approval.",                                                                                                                                             "item_level": "sub",  "parent_order": 1},
+            # Q2 — main + 2 subs
+            {"item_order": 6, "item_text": "Was the operator's Training Record for the specific task performed present?",                                                                                                          "item_level": "main", "parent_order": None},
+            {"item_order": 7, "item_text": "If the SOP was updated recently, was the operator re-trained on the new version before this batch was started?",                                                                      "item_level": "sub",  "parent_order": 6},
+            {"item_order": 8, "item_text": "Is there evidence (e.g., a quiz or supervisor sign-off) that the training was effective?",                                                                                            "item_level": "sub",  "parent_order": 6},
+        ],
+          },
+    "Maintenance": {
+        "Infrastructure & Measuring Equipment": [
+            # Q1 — main + 3 subs
+            {"item_order": 1, "item_text": "Take the ID of the equipment used in the BMR; was it within its Calibration Date at the time of use?",                                                                                "item_level": "main", "parent_order": None},
+            {"item_order": 2, "item_text": "Does the Calibration Certificate for that specific ID show traceability to national or international standards (NIST/ISO)?",                                                           "item_level": "sub",  "parent_order": 1},
+            {"item_order": 3, "item_text": "Is there evidence that shows Preventive Maintenance (PM) was performed according to the schedule before this batch?",                                                                  "item_level": "sub",  "parent_order": 1},
+            {"item_order": 4, "item_text": "Does the equipment have IQ/OQ/PQ validation record?",                                                                                                                                 "item_level": "sub",  "parent_order": 1},
+        ],
     },
-    "MR": {
-        "General Requirements":       [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Does top management conduct management reviews at planned intervals?","Is MRM plan documented","Is the management review procedure defined and implemented?","Are management review records maintained","Is MRM notice sent acknowledged by respective personnel and is it documented?","Is the MRM attendance documented?"])],
-        "Management Review Inputs":   [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Results of internal and external audits","Customer feedback (including complaints)","Process performance and product conformity","Status of preventive and corrective actions","Follow-up actions from previous management reviews","Changes that could affect the QMS (regulatory, organizational, product-related)","Recommendations for improvement","New or revised regulatory requirements applicable to medical devices","Resource needs (human, infrastructure, work environment)"])],
-        "Conduct of Management Review": [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Is the management review chaired or attended by top management?","Are relevant process owners involved as required?","Are discussions aligned with the planned agenda?"])],
-        "Management Review Outputs":  [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Improvement of the effectiveness of the QMS","Improvement of product-related processes","Improvement of medical device safety and performance","Resource requirements","Actions addressing identified risks","Responsibilities and timelines assigned for actions"])],
-        "Follow-up & Records":        [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Is the effectiveness of previous actions reviewed in subsequent MRMs?","Are management review minutes legible, dated, and approved?"])],
+    "Quality Assurance": {
+        "Document Control, CAPA & Management Review": [
+            # Q1 — main + 1 sub
+            {"item_order": 1,  "item_text": "Is the BMR version used for this batch the most current approved version in the Document Control System?",                                                                            "item_level": "main", "parent_order": None},
+            {"item_order": 2,  "item_text": "Can this version be traced back to a specific Change Control record that explains why the previous version was retired?",                                                             "item_level": "sub",  "parent_order": 1},
+            # Q2 — main + 4 subs
+            {"item_order": 3,  "item_text": "Have any Customer Complaints been recorded?",                                                                                                                                        "item_level": "main", "parent_order": None},
+            {"item_order": 4,  "item_text": "Confirm whether any complaints are associated with the batch under audit.",                                                                                                          "item_level": "sub",  "parent_order": 3},
+            {"item_order": 5,  "item_text": "If a complaint related to this batch exists: was the complaint investigation completed within the defined timeline?",                                                                 "item_level": "sub",  "parent_order": 3},
+            {"item_order": 6,  "item_text": "Were any containment actions implemented for the complaint?",                                                                                                                        "item_level": "sub",  "parent_order": 3},
+            {"item_order": 7,  "item_text": "If complaint leads to CAPA — was any CAPA initiated?",                                                                                                                              "item_level": "sub",  "parent_order": 3},
+            {"item_order": 8,  "item_text": "Open the CAPA log and verify it was implemented and CAPA was closed.",                                                                                                              "item_level": "sub",  "parent_order": 3},
+            # Q3 — main + 3 subs (MRM)
+            {"item_order": 9,  "item_text": "Is MRM conducted as per the schedule?",                                                                                                                                             "item_level": "main", "parent_order": None},
+            {"item_order": 10, "item_text": "Verify the defined frequency of Management Review Meetings.",                                                                                                                        "item_level": "sub",  "parent_order": 9},
+            {"item_order": 11, "item_text": "Open minutes of the meeting (MoM) and confirm the following inputs were included: customer feedback; complaint handling; reporting to regulatory authorities; audits; monitoring and measurement of processes and product; corrective and preventive actions; follow-up from previous MRM; changes affecting the QMS; recommendations for improvement; applicable new or revised regulatory requirements.", "item_level": "sub", "parent_order": 9},
+            {"item_order": 12, "item_text": "Verify the assigned actions from MRM are documented with responsibilities and timelines.",                                                                                            "item_level": "sub",  "parent_order": 9},
+            # Q4 — main + 2 subs (Quality Objectives)
+            {"item_order": 13, "item_text": "Does the Quality Performance of this batch align with the Quality Objectives set for this production year?",                                                                         "item_level": "main", "parent_order": None},
+            {"item_order": 14, "item_text": "Open the Quality Objectives for the current production year and verify objectives are measurable.",                                                                                  "item_level": "sub",  "parent_order": 13},
+            {"item_order": 15, "item_text": "Verify the measurable targets and confirm that the batch performance aligns with the quality objectives.",                                                                           "item_level": "sub",  "parent_order": 13},
+        ],
     },
-    "Purchase": {
-        "Supplier Selection":             [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Is supplier selection initiated when a new material, component, or service is required?","Does the Purchase Department identify potential suppliers?","Are supplier identification sources documented","Are suppliers evaluated based on defined selection criteria?","Are suppliers categorized on risk based approach?"])],
-        "Supplier Evaluation & Approval": [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Is Supplier Assessment completed for potential suppliers","Is the completed assessment reviewed","Are suppliers evaluated and scored as per defined criteria?","Are approved suppliers included in Approved Supplier List","For critical suppliers, is Supplier Quality Agreement executed before approval?"])],
-        "Control of Outsourced Processes":[{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Are outsourced processes assigned only to approved suppliers?","Is verification of certificates and reports from outsourced activities carried out?"])],
-        "Purchase Order Control":         [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Is supplier verification against the Approved Supplier List performed before PO issuance?","Is Supplier Selection & Evaluation initiated if the supplier is not approved","Are POs reviewed and approved by authorized personnel?","Are PO records maintained?"])],
-        "Verification of Purchased Product": [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Is Incoming Inspection conducted as per approved procedure or specifications?","Are inspection results documented?","Are inspection outcomes (acceptance/rejection/deviation/concession) linked to the supplier?","Are non-conforming items recorded","Are inspection results used for supplier performance monitoring"])],
-        "Supplier Performance Evaluation":[{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Is supplier performance evaluated based on defined parameters?","Are suppliers classified according to defined rating scale?","Are suppliers evaluated as per defined time period?","Are supplier audits conducted when required?","Is SCAR issued to the suppliers when required?","Are supplier ratings reviewed in Management Review Meetings?"])],
-        "Supplier Re-evaluation":         [{"item_order": i+1, "item_text": t, "item_level": "main", "parent_order": None} for i, t in enumerate(["Is re-evaluation initiated based on performance monitoring results?","Are re-evaluation outcomes documented?"])],
+    "Sales and Marketing": {
+        "Customer Order Compliance": [
+            # Q1 — main only
+            {"item_order": 1, "item_text": "Does the finished product in this batch meet the specific requirements (e.g., custom labeling, language, or SKU) defined in the Customer's Purchase Order?",                          "item_level": "main", "parent_order": None},
+        ],
     },
+    
 }
 
 def _catalog_key(s: str) -> str:
@@ -984,6 +1019,32 @@ def change_password(username: str, old_password: str, new_password: str, *, tena
     pw = make_password_record(new_password)
     _execute("update users set password_salt = ?, password_iterations = ?, password_hash = ? where tenant_id = ? and lower(username) = ?;", (pw["salt"], int(pw["iterations"]), pw["hash"], tenant_id, username))
     return True, "Password updated successfully."
+
+def change_username(username: str, new_username: str, current_password: str, *, tenant_id: Optional[str] = None) -> Tuple[bool, Optional[str], str]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    username = _normalize_text(username).lower()
+    new_username_clean = _normalize_username(new_username)
+    if not username:
+        return False, None, "Current username is required."
+    if not new_username_clean:
+        return False, None, "New username is required."
+    if len(new_username_clean) < 3:
+        return False, None, "New username must be at least 3 characters."
+    if username == new_username_clean.lower():
+        return False, None, "Please enter a different username."
+    if not current_password:
+        return False, None, "Current password is required."
+    u = find_user(username, tenant_id=tenant_id)
+    if not u:
+        return False, None, "User not found."
+    if not u.get("is_active", True):
+        return False, None, "User is disabled."
+    if not _verify_password_columns(current_password, u.get("password_salt"), u.get("password_iterations"), u.get("password_hash")):
+        return False, None, "Current password is incorrect."
+    if find_user(new_username_clean, tenant_id=tenant_id):
+        return False, None, "That username already exists."
+    _execute("update users set username = ? where tenant_id = ? and lower(username) = ?;", (new_username_clean, tenant_id, username))
+    return True, new_username_clean, f"Username updated successfully to '{new_username_clean}'."
 
 def admin_reset_password(target_username: str, new_password: str, *, tenant_id: Optional[str] = None) -> Tuple[bool, str]:
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
@@ -1339,7 +1400,6 @@ def get_checklist_rows_for_audit_section(audit_id: str, dept: str, section: str,
             out.append({
                 "sr_no":        sr,
                 "checklist":    str(r.get("checklist", "")).strip(),
-                "clause_no":    str(r.get("clause_no", "") or "").strip(),
                 "observation":  str(r.get("observation", "") or "").strip(),
                 "evidence":     str(r.get("evidence", "") or "").strip(),
                 "item_level":   str(r.get("item_level", "main") or "main").strip() or "main",
@@ -1356,7 +1416,7 @@ def get_checklist_rows_for_audit_section(audit_id: str, dept: str, section: str,
                 for r in out:
                     key = " ".join(str(r.get("checklist", "")).split()).lower()
                     if key:
-                        ans_map[key] = {"clause_no": r.get("clause_no", ""), "observation": r.get("observation", ""), "evidence": r.get("evidence", "")}
+                        ans_map[key] = {"observation": r.get("observation", ""), "evidence": r.get("evidence", "")}
     
                 rebuilt: List[Dict[str, Any]] = []
                 for it in hier_items:
@@ -1366,7 +1426,6 @@ def get_checklist_rows_for_audit_section(audit_id: str, dept: str, section: str,
                     rebuilt.append({
                         "sr_no":        str(it.get("item_order")),
                         "checklist":    txt,
-                        "clause_no":    str(prev.get("clause_no", "") or "").strip(),
                         "observation":  str(prev.get("observation", "") or "").strip(),
                         "evidence":     str(prev.get("evidence", "") or "").strip(),
                         "item_level":   str(it.get("item_level", "main") or "main").strip() or "main",
@@ -1380,7 +1439,6 @@ def get_checklist_rows_for_audit_section(audit_id: str, dept: str, section: str,
         return [{
             "sr_no":        str(item["item_order"]),
             "checklist":    str(item["item_text"] or "").strip(),
-            "clause_no":    "",
             "observation":  "",
             "evidence":     "",
             "item_level":   str(item["item_level"] or "main").strip() or "main",
@@ -1390,7 +1448,7 @@ def get_checklist_rows_for_audit_section(audit_id: str, dept: str, section: str,
     items = get_items_for_department_section(_normalize_text(dept), _normalize_text(section), tenant_id=tenant_id) or []
     return [{
         "sr_no": str(i), "checklist": str(item).strip(),
-        "clause_no": "", "observation": "", "evidence": "",
+        "observation": "", "evidence": "",
         "item_level": "main", "parent_order": None,
     } for i, item in enumerate(items, start=1)]
 
@@ -1453,7 +1511,7 @@ def get_checklist_progress(audit_id: str, dept: str, section: str, *, tenant_id:
         "total_rows":       len(rows),
     }
 
-def save_single_checklist_response(audit_id: str, dept: str, section: str, sr_no: str, observation: str, evidence: str, clause_no: str = "", *, auditor_name: Optional[str] = None, tenant_id: Optional[str] = None) -> Tuple[bool, str]:
+def save_single_checklist_response(audit_id: str, dept: str, section: str, sr_no: str, observation: str, evidence: str, *, auditor_name: Optional[str] = None, tenant_id: Optional[str] = None) -> Tuple[bool, str]:
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
     sr_no_s = str(sr_no or "").strip()
     if not sr_no_s: return False, "sr_no is required."
@@ -1464,7 +1522,6 @@ def save_single_checklist_response(audit_id: str, dept: str, section: str, sr_no
         return False, f"Checklist row '{sr_no_s}' not found. Please reload the checklist."
     # Update only observation/evidence — all hierarchy fields (item_level, parent_order,
     # checklist text, sr_no) are preserved exactly as loaded from DB/catalog.
-    rows[idx]["clause_no"]    = str(clause_no or "").strip()
     rows[idx]["observation"]  = str(observation or "").strip()
     rows[idx]["evidence"]     = str(evidence or "").strip()
     # Normalize hierarchy fields before writing back (guards against stale None types)
@@ -1482,8 +1539,8 @@ def add_audit_section_checklist_item(audit_id: str, dept: str, section: str, che
     checklist_text = (checklist_text or "").strip()
     if not checklist_text: return False, "Checklist point is required."
     existing = load_audit_section_table(audit_id, dept, section, tenant_id=tenant_id) or []
-    rows = list(existing) if existing else [{"sr_no": str(i), "checklist": str(item).strip(), "clause_no": "", "observation": "", "evidence": ""} for i, item in enumerate(get_items_for_department_section(dept, section, tenant_id=tenant_id), start=1)]
-    rows.append({"sr_no": str(len(rows) + 1), "checklist": checklist_text, "clause_no": "", "observation": "", "evidence": ""})
+    rows = list(existing) if existing else [{"sr_no": str(i), "checklist": str(item).strip(), "observation": "", "evidence": ""} for i, item in enumerate(get_items_for_department_section(dept, section, tenant_id=tenant_id), start=1)]
+    rows.append({"sr_no": str(len(rows) + 1), "checklist": checklist_text, "observation": "", "evidence": ""})
     return save_audit_section_table(audit_id=audit_id, dept=dept, section=section, rows=rows, auditor_name=auditor_name, tenant_id=tenant_id)
 
 def validate_audit_checklists_complete(audit_id: str, tenant_id: Optional[str] = None) -> Tuple[bool, str]:
