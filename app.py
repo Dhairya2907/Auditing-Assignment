@@ -1110,12 +1110,14 @@ if not st.session_state.auth["logged_in"]:
         """, unsafe_allow_html=True)
 
     if submitted:
-        tenant_code = (tenant_code or "").strip().lower()
-        username    = (username or "").strip().lower()
-        if hasattr(engine, "authenticate_tenant"):
-            ok, u, msg = engine.authenticate_tenant(tenant_code, username, password)
-        else:
-            ok, u, msg = engine.authenticate(username, password)
+        with st.spinner("Signing in... Please wait"):
+            tenant_code = (tenant_code or "").strip().lower()
+            username    = (username or "").strip().lower()
+            if hasattr(engine, "authenticate_tenant"):
+                ok, u, msg = engine.authenticate_tenant(tenant_code, username, password)
+            else:
+                ok, u, msg = engine.authenticate(username, password)
+
         if not ok:
             st.error(msg)
         else:

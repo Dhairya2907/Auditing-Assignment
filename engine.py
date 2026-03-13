@@ -1339,6 +1339,7 @@ def get_checklist_rows_for_audit_section(audit_id: str, dept: str, section: str,
             out.append({
                 "sr_no":        sr,
                 "checklist":    str(r.get("checklist", "")).strip(),
+                "clause_no":    str(r.get("clause_no", "") or "").strip(),
                 "observation":  str(r.get("observation", "") or "").strip(),
                 "evidence":     str(r.get("evidence", "") or "").strip(),
                 "item_level":   str(r.get("item_level", "main") or "main").strip() or "main",
@@ -1355,7 +1356,7 @@ def get_checklist_rows_for_audit_section(audit_id: str, dept: str, section: str,
                 for r in out:
                     key = " ".join(str(r.get("checklist", "")).split()).lower()
                     if key:
-                        ans_map[key] = {"observation": r.get("observation", ""), "evidence": r.get("evidence", "")}
+                        ans_map[key] = {"clause_no": r.get("clause_no", ""), "observation": r.get("observation", ""), "evidence": r.get("evidence", "")}
     
                 rebuilt: List[Dict[str, Any]] = []
                 for it in hier_items:
@@ -1365,6 +1366,7 @@ def get_checklist_rows_for_audit_section(audit_id: str, dept: str, section: str,
                     rebuilt.append({
                         "sr_no":        str(it.get("item_order")),
                         "checklist":    txt,
+                        "clause_no":    str(prev.get("clause_no", "") or "").strip(),
                         "observation":  str(prev.get("observation", "") or "").strip(),
                         "evidence":     str(prev.get("evidence", "") or "").strip(),
                         "item_level":   str(it.get("item_level", "main") or "main").strip() or "main",
@@ -1378,6 +1380,7 @@ def get_checklist_rows_for_audit_section(audit_id: str, dept: str, section: str,
         return [{
             "sr_no":        str(item["item_order"]),
             "checklist":    str(item["item_text"] or "").strip(),
+            "clause_no":    "",
             "observation":  "",
             "evidence":     "",
             "item_level":   str(item["item_level"] or "main").strip() or "main",
@@ -1387,7 +1390,7 @@ def get_checklist_rows_for_audit_section(audit_id: str, dept: str, section: str,
     items = get_items_for_department_section(_normalize_text(dept), _normalize_text(section), tenant_id=tenant_id) or []
     return [{
         "sr_no": str(i), "checklist": str(item).strip(),
-        "observation": "", "evidence": "",
+        "clause_no": "", "observation": "", "evidence": "",
         "item_level": "main", "parent_order": None,
     } for i, item in enumerate(items, start=1)]
 
@@ -1450,7 +1453,7 @@ def get_checklist_progress(audit_id: str, dept: str, section: str, *, tenant_id:
         "total_rows":       len(rows),
     }
 
-def save_single_checklist_response(audit_id: str, dept: str, section: str, sr_no: str, observation: str, evidence: str, *, auditor_name: Optional[str] = None, tenant_id: Optional[str] = None) -> Tuple[bool, str]:
+def save_single_checklist_response(audit_id: str, dept: str, section: str, sr_no: str, observation: str, evidence: str, clause_no: str = "", *, auditor_name: Optional[str] = None, tenant_id: Optional[str] = None) -> Tuple[bool, str]:
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
     sr_no_s = str(sr_no or "").strip()
     if not sr_no_s: return False, "sr_no is required."
@@ -1461,6 +1464,7 @@ def save_single_checklist_response(audit_id: str, dept: str, section: str, sr_no
         return False, f"Checklist row '{sr_no_s}' not found. Please reload the checklist."
     # Update only observation/evidence — all hierarchy fields (item_level, parent_order,
     # checklist text, sr_no) are preserved exactly as loaded from DB/catalog.
+    rows[idx]["clause_no"]    = str(clause_no or "").strip()
     rows[idx]["observation"]  = str(observation or "").strip()
     rows[idx]["evidence"]     = str(evidence or "").strip()
     # Normalize hierarchy fields before writing back (guards against stale None types)
@@ -1478,8 +1482,8 @@ def add_audit_section_checklist_item(audit_id: str, dept: str, section: str, che
     checklist_text = (checklist_text or "").strip()
     if not checklist_text: return False, "Checklist point is required."
     existing = load_audit_section_table(audit_id, dept, section, tenant_id=tenant_id) or []
-    rows = list(existing) if existing else [{"sr_no": str(i), "checklist": str(item).strip(), "observation": "", "evidence": ""} for i, item in enumerate(get_items_for_department_section(dept, section, tenant_id=tenant_id), start=1)]
-    rows.append({"sr_no": str(len(rows) + 1), "checklist": checklist_text, "observation": "", "evidence": ""})
+    rows = list(existing) if existing else [{"sr_no": str(i), "checklist": str(item).strip(), "clause_no": "", "observation": "", "evidence": ""} for i, item in enumerate(get_items_for_department_section(dept, section, tenant_id=tenant_id), start=1)]
+    rows.append({"sr_no": str(len(rows) + 1), "checklist": checklist_text, "clause_no": "", "observation": "", "evidence": ""})
     return save_audit_section_table(audit_id=audit_id, dept=dept, section=section, rows=rows, auditor_name=auditor_name, tenant_id=tenant_id)
 
 def validate_audit_checklists_complete(audit_id: str, tenant_id: Optional[str] = None) -> Tuple[bool, str]:
