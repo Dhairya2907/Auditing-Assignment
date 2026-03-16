@@ -537,6 +537,101 @@ def render_status_legend():
         unsafe_allow_html=True,
     )
 
+# ── ISO 13485 Clause Catalog (module-level so all pages can use it) ──────────
+_CLAUSE_CATALOG = {
+    "4.1 General requirements": [],
+    "4.2 Documentation requirements": [
+        "4.2.1 General",
+        "4.2.2 Quality Manual",
+        "4.2.3 Medical device file",
+        "4.2.4 Control of documents",
+        "4.2.5 Control of records",
+    ],
+    "5.1 Management commitment": [],
+    "5.2 Customer focus": [],
+    "5.3 Quality policy": [],
+    "5.4 Planning": [
+        "5.4.1 Quality objectives",
+        "5.4.2 Quality management system planning",
+    ],
+    "5.5 Responsibility, authority and communication": [
+        "5.5.1 Responsibility and authority",
+        "5.5.2 Management representative",
+        "5.5.3 Internal communication",
+    ],
+    "5.6 Management review": [
+        "5.6.1 General",
+        "5.6.2 Review input",
+        "5.6.3 Review output",
+    ],
+    "6.1 Provision of resources": [],
+    "6.2 Human resources": [],
+    "6.3 Infrastructure": [],
+    "6.4 Work environment and contamination control": [
+        "6.4.1 Work environment control",
+        "6.4.2 Contamination control",
+    ],
+    "7.1 Planning of product realization": [],
+    "7.2 Customer-related processes": [
+        "7.2.1 Determination of requirements related to product",
+        "7.2.2 Review of requirements related to product",
+        "7.2.3 Communication",
+    ],
+    "7.3 Design and development": [
+        "7.3.1 General",
+        "7.3.2 Design and development planning",
+        "7.3.3 Design and development inputs",
+        "7.3.4 Design and development outputs",
+        "7.3.5 Design and development review",
+        "7.3.6 Design and development verification",
+        "7.3.7 Design and development validation",
+        "7.3.8 Design and development transfer",
+        "7.3.9 Control of design and development changes",
+        "7.3.10 Design and development files",
+    ],
+    "7.4 Purchasing": [
+        "7.4.1 Purchasing process",
+        "7.4.2 Purchasing information",
+        "7.4.3 Verification of purchase product",
+    ],
+    "7.5 Production and service provision": [
+        "7.5.1 Control of production and service provision",
+        "7.5.2 Cleanliness of product",
+        "7.5.3 Installation activities",
+        "7.5.4 Servicing activities",
+        "7.5.5 Particular requirements for sterile medical devices",
+        "7.5.6 Validation of processes for production and service provision",
+        "7.5.7 Particular requirements for validation of processes for sterilization and sterile barrier systems",
+        "7.5.8 Identification",
+        "7.5.9 Traceability",
+        "7.5.10 Customer property",
+        "7.5.11 Preservation of product",
+    ],
+    "7.6 Control of monitoring and measuring equipment": [],
+    "8.1 General": [],
+    "8.2 Monitoring and measurement": [
+        "8.2.1 Feedback",
+        "8.2.2 Complaint handling",
+        "8.2.3 Reporting to regulatory authorities",
+        "8.2.4 Internal audit",
+        "8.2.5 Monitoring and measurement of processes",
+        "8.2.6 Monitoring and measurement of product",
+    ],
+    "8.3 Control of nonconforming product": [
+        "8.3.1 General",
+        "8.3.2 Actions in response to nonconforming product detected before delivery",
+        "8.3.3 Actions in response to nonconforming product detected after delivery",
+        "8.3.4 Rework",
+    ],
+    "8.4 Analysis of data": [],
+    "8.5 Improvement": [
+        "8.5.1 General",
+        "8.5.2 Corrective action",
+        "8.5.3 Preventive action",
+    ],
+}
+_CLAUSE_MAIN_OPTIONS = [""] + list(_CLAUSE_CATALOG.keys())
+
 # ── App config ────────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Audit Assignment System", page_icon="✅", layout="wide", initial_sidebar_state="expanded")
 inject_enterprise_css()
@@ -2770,6 +2865,19 @@ def page_auditor_checklist():
                     st.session_state[ev_k]     = str(node.get("evidence","") or "")
                 if clause_k not in st.session_state:
                     st.session_state[clause_k] = str(node.get("clause_no","") or "")
+                clause_main_k = f"ck_clause_main::{audit_id}::{section}::{node_sr}"
+                clause_sub_k  = f"ck_clause_sub::{audit_id}::{section}::{node_sr}"
+                if clause_main_k not in st.session_state:
+                    _saved_clause = st.session_state[clause_k]
+                    _matched_main = ""
+                    _matched_sub  = ""
+                    for _cm, _subs in _CLAUSE_CATALOG.items():
+                        if _saved_clause == _cm:
+                            _matched_main = _cm; break
+                        if _saved_clause in _subs:
+                            _matched_main = _cm; _matched_sub = _saved_clause; break
+                    st.session_state[clause_main_k] = _matched_main
+                    st.session_state[clause_sub_k]  = _matched_sub
 
                 ml = {"main": 0, "sub": 24, "subsub": 48}.get(node_lvl, 0)
                 st.markdown(f'<div class="ck-form" style="margin-left:{ml}px">',
@@ -2781,8 +2889,28 @@ def page_auditor_checklist():
                 ev  = col_ev.text_area("Evidence *",     key=ev_k,
                                         height=90, disabled=not can_edit)
 
-                clause_no = st.text_input("Clause No.", key=clause_k,
-                                          disabled=not can_edit)
+                _cl1, _cl2 = st.columns([1, 1])
+                _cur_main = st.session_state.get(clause_main_k, "")
+                _main_idx = _CLAUSE_MAIN_OPTIONS.index(_cur_main) if _cur_main in _CLAUSE_MAIN_OPTIONS else 0
+                _sel_main = _cl1.selectbox(
+                    "Clause No.",
+                    options=_CLAUSE_MAIN_OPTIONS,
+                    index=_main_idx,
+                    key=clause_main_k,
+                    disabled=not can_edit,
+                )
+                _sub_opts = [""] + _CLAUSE_CATALOG.get(_sel_main, [])
+                _cur_sub  = st.session_state.get(clause_sub_k, "")
+                _sub_idx  = _sub_opts.index(_cur_sub) if _cur_sub in _sub_opts else 0
+                _has_subs = bool(_CLAUSE_CATALOG.get(_sel_main))
+                _sel_sub  = _cl2.selectbox(
+                    "Sub-Clause No.",
+                    options=_sub_opts,
+                    index=_sub_idx,
+                    key=clause_sub_k,
+                    disabled=(not can_edit or not _sel_main or not _has_subs),
+                )
+                clause_no = _sel_sub if _sel_sub else _sel_main
 
                 is_last = (ni == len(walk) - 1)
                 btn_lbl  = "✅ Save & Finish" if is_last else "Save & Next ➜"
@@ -2791,8 +2919,8 @@ def page_auditor_checklist():
                 with b1:
                     if st.button(btn_lbl, key=f"ck_save_{audit_id}_{section}_{node_sr}",
                                  type="primary", disabled=not can_edit):
-                        if not str(obs or "").strip() or not str(ev or "").strip():
-                            st.error("Both Observation and Evidence are required.")
+                        if not str(obs or "").strip() or not str(ev or "").strip() or not str(clause_no or "").strip():
+                            st.error("Observation, Evidence and Clause No. are all required.")
                         else:
                             ok, msg = _engine_call(
                                 "save_single_checklist_response",
@@ -2803,9 +2931,11 @@ def page_auditor_checklist():
                             if not ok:
                                 st.error(msg)
                             else:
-                                st.session_state.pop(obs_k,    None)
-                                st.session_state.pop(ev_k,     None)
-                                st.session_state.pop(clause_k, None)
+                                st.session_state.pop(obs_k,       None)
+                                st.session_state.pop(ev_k,        None)
+                                st.session_state.pop(clause_k,    None)
+                                st.session_state.pop(clause_main_k, None)
+                                st.session_state.pop(clause_sub_k,  None)
                                 if is_last:
                                     # all nodes done → back to main list
                                     st.session_state[main_key] = None
@@ -3067,24 +3197,261 @@ def page_reports():
             )
 
             if st.button("Generate Final Report", type="primary"):
-                with st.spinner("Generating PDF..."):
-                    if not _HAS_REPORT_GEN:
-                        st.error("PDF generation is unavailable because the report generator dependencies are missing (reportlab). Install reportlab in requirements.txt to enable PDF generation.")
-                        ok, msg, pdf_path = False, "report_generator unavailable", None
-                    else:
+                with st.spinner("Generating report..."):
+                    # ── Step 1: save via report_generator if available ────
+                    if _HAS_REPORT_GEN:
                         ok, msg, pdf_path = report_generator.generate_final_audit_report_pdf(
-                        tenant_id=tenant_id,
-                        generated_by=username,
-                        selected_audit_ids=selected_ids,
-                        admin_summaries_by_audit_id=admin_summaries_by_audit_id,
-                        output_filename=output_name or None,
-                    )
+                            tenant_id=tenant_id,
+                            generated_by=username,
+                            selected_audit_ids=selected_ids,
+                            admin_summaries_by_audit_id=admin_summaries_by_audit_id,
+                            output_filename=output_name or None,
+                        )
+                        if ok:
+                            st.success(msg)
+                        else:
+                            st.error(msg)
+                    # ── Step 2: build PDF with checklist + clause data ────
+                    try:
+                        from reportlab.lib.pagesizes import A4, landscape
+                        from reportlab.lib import colors
+                        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+                        from reportlab.lib.units import mm
+                        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, HRFlowable
+                        import io as _rio
+                        _buf = _rio.BytesIO()
+                        _doc = SimpleDocTemplate(_buf, pagesize=landscape(A4),
+                                                leftMargin=12*mm, rightMargin=12*mm,
+                                                topMargin=15*mm, bottomMargin=15*mm)
+                        _styles = getSampleStyleSheet()
+                        _cell  = ParagraphStyle("cell", parent=_styles["Normal"], fontSize=7, leading=9)
+                        _hdr   = ParagraphStyle("hdr",  parent=_styles["Normal"], fontSize=7, leading=9,
+                                                textColor=colors.white, fontName="Helvetica-Bold")
+                        _sec_s = ParagraphStyle("sec",  parent=_styles["Normal"], fontSize=9, leading=11,
+                                                fontName="Helvetica-Bold", textColor=colors.HexColor("#0f2347"))
+                        _title_s = ParagraphStyle("ttl", parent=_styles["Normal"], fontSize=13, leading=16,
+                                                  fontName="Helvetica-Bold", spaceAfter=4)
+                        _sub_s = ParagraphStyle("sub", parent=_styles["Normal"], fontSize=9, leading=11,
+                                                textColor=colors.HexColor("#64748b"), spaceAfter=8)
+                        _elements = []
+                        _elements.append(Paragraph("Final Audit Report — with Checklist Data", _title_s))
+                        _elements.append(Paragraph(f"Generated by: {username}  |  Date: {__import__('datetime').date.today()}", _sub_s))
+                        _elements.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor("#0f2347")))
+                        _elements.append(Spacer(1, 6*mm))
+                        _col_names = ["Section", "Question", "Observation", "Evidence", "Clause No.", "Sub-Clause No."]
+                        _col_w     = [25*mm, 70*mm, 50*mm, 50*mm, 28*mm, 34*mm]
+                        _tbl_style = TableStyle([
+                            ("BACKGROUND",    (0, 0), (-1, 0),  colors.HexColor("#0f2347")),
+                            ("TEXTCOLOR",     (0, 0), (-1, 0),  colors.white),
+                            ("ROWBACKGROUNDS",(0, 1), (-1, -1), [colors.white, colors.HexColor("#f0f4ff")]),
+                            ("GRID",          (0, 0), (-1, -1), 0.3, colors.HexColor("#dde3ef")),
+                            ("VALIGN",        (0, 0), (-1, -1), "TOP"),
+                            ("LEFTPADDING",   (0, 0), (-1, -1), 4),
+                            ("RIGHTPADDING",  (0, 0), (-1, -1), 4),
+                            ("TOPPADDING",    (0, 0), (-1, -1), 3),
+                            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+                        ])
+                        for _aid in selected_ids:
+                            _a       = _eligible_map.get(_aid, {})
+                            _dept    = _a.get("audited_department", "")
+                            _title   = _a.get("title", "Untitled")
+                            _auditor = _a.get("assigned_auditor", "")
+                            _summary = admin_summaries_by_audit_id.get(_aid, "")
+                            _elements.append(Paragraph(f"{_title}  |  {_dept}  |  Auditor: {_auditor}", _sec_s))
+                            if _summary:
+                                _elements.append(Paragraph(f"Summary: {_summary}", _sub_s))
+                            _elements.append(Spacer(1, 3*mm))
+                            _sections = engine.get_sections_for_department(_dept, tenant_id=tenant_id) or []
+                            _tdata = [[Paragraph(c, _hdr) for c in _col_names]]
+                            for _sec_name in _sections:
+                                _ck_rows = engine.get_checklist_rows_for_audit_section(
+                                    _aid, _dept, _sec_name, tenant_id=tenant_id) or []
+                                for _r in _ck_rows:
+                                    _raw = str(_r.get("clause_no", "") or "").strip()
+                                    _cm, _cs = "", ""
+                                    if _raw:
+                                        for _ck, _cv in _CLAUSE_CATALOG.items():
+                                            if _raw == _ck:
+                                                _cm = _ck; break
+                                            if _raw in _cv:
+                                                _cm = _ck; _cs = _raw; break
+                                        if not _cm:
+                                            _cm = _raw
+                                    _tdata.append([
+                                        Paragraph(str(_sec_name), _cell),
+                                        Paragraph(str(_r.get("checklist", "") or ""), _cell),
+                                        Paragraph(str(_r.get("observation", "") or ""), _cell),
+                                        Paragraph(str(_r.get("evidence", "") or ""), _cell),
+                                        Paragraph(_cm, _cell),
+                                        Paragraph(_cs, _cell),
+                                    ])
+                            if len(_tdata) > 1:
+                                _tbl = Table(_tdata, colWidths=_col_w, repeatRows=1)
+                                _tbl.setStyle(_tbl_style)
+                                _elements.append(_tbl)
+                            else:
+                                _elements.append(Paragraph("No checklist data found for this audit.", _sub_s))
+                            _elements.append(Spacer(1, 8*mm))
+                        _doc.build(_elements)
+                        _buf.seek(0)
+                        _fname = (output_name or "Final_Audit_Report").replace(".pdf", "") + "_with_checklist.pdf"
+                        st.download_button(
+                            label="⬇ Download Final Report PDF (with Checklist)",
+                            data=_buf.read(),
+                            file_name=_fname,
+                            mime="application/pdf",
+                            key="dl_full_checklist_pdf",
+                        )
+                    except ImportError:
+                        st.error("reportlab is not installed. Add 'reportlab' to requirements.txt.")
+                    except Exception as _ex:
+                        st.error(f"Failed to build checklist PDF: {_ex}")
 
-                if ok:
-                    st.success(msg)
-                    _rerun()
+        st.divider()
+
+        # ── Checklist Data Export ─────────────────────────────────────────
+        st.subheader("Export Checklist Data")
+        st.caption("Download all checklist responses for a selected audit as CSV or PDF. Columns: Question, Observation, Evidence, Clause No., Sub-Clause No.")
+
+        _export_all_audits = engine.list_audits(tenant_id=tenant_id)
+        _export_labels = [f"{a.get('title','')} | {a.get('audited_department','')} | {a.get('status','')}" for a in _export_all_audits]
+        _export_label_to_audit = {lbl: a for lbl, a in zip(_export_labels, _export_all_audits)}
+
+        if not _export_labels:
+            st.info("No audits available for export.")
+        else:
+            _exp_sel = st.selectbox("Select Audit to Export", options=_export_labels, key="export_audit_select")
+            _exp_audit = _export_label_to_audit[_exp_sel]
+            _exp_audit_id = _exp_audit.get("audit_id", "")
+            _exp_dept     = _exp_audit.get("audited_department", "")
+
+            # Collect all rows across all sections for this audit
+            def _build_export_rows(audit_id, dept, tid):
+                import re as _re
+                sections = engine.get_sections_for_department(dept, tenant_id=tid) or []
+                all_rows = []
+                for sec in sections:
+                    ck_rows = engine.get_checklist_rows_for_audit_section(audit_id, dept, sec, tenant_id=tid) or []
+                    for r in ck_rows:
+                        raw_clause = str(r.get("clause_no", "") or "").strip()
+                        # Split saved clause_no into main clause and sub-clause
+                        # Sub-clause has pattern like "7.4.1 ..." (number.number.number)
+                        # Look up which main clause owns this sub-clause
+                        _found_main = ""
+                        _found_sub  = ""
+                        if raw_clause:
+                            for _ck, _cv in _CLAUSE_CATALOG.items():
+                                if raw_clause == _ck:
+                                    _found_main = _ck; break
+                                if raw_clause in _cv:
+                                    _found_main = _ck; _found_sub = raw_clause; break
+                            if not _found_main:
+                                _found_main = raw_clause  # fallback: show as-is
+                        main_clause_full = _found_main
+                        sub_clause       = _found_sub
+                        all_rows.append({
+                            "Section":      sec,
+                            "Question":     str(r.get("checklist", "") or "").strip(),
+                            "Observation":  str(r.get("observation", "") or "").strip(),
+                            "Evidence":     str(r.get("evidence", "") or "").strip(),
+                            "Clause No.":   main_clause_full,
+                            "Sub-Clause No.": sub_clause,
+                        })
+                return all_rows
+
+            _exp_rows = _build_export_rows(_exp_audit_id, _exp_dept, tenant_id)
+
+            if not _exp_rows:
+                st.info("No checklist data found for this audit.")
+            else:
+                import pandas as _epd
+                import io as _eio
+                _exp_df = _epd.DataFrame(_exp_rows, columns=["Section", "Question", "Observation", "Evidence", "Clause No.", "Sub-Clause No."])
+
+                # Preview
+                st.dataframe(_exp_df, use_container_width=True, hide_index=True)
+
+                _ec1, _ec2 = st.columns(2)
+
+                # ── CSV download ──────────────────────────────────────────
+                _csv_buf = _eio.StringIO()
+                _exp_df.to_csv(_csv_buf, index=False)
+                _ec1.download_button(
+                    label="⬇ Download CSV",
+                    data=_csv_buf.getvalue().encode("utf-8"),
+                    file_name=f"checklist_{_exp_audit_id[:8]}.csv",
+                    mime="text/csv",
+                    key="export_csv_btn",
+                    use_container_width=True,
+                )
+
+                # ── PDF download ──────────────────────────────────────────
+                def _build_checklist_pdf(audit, df):
+                    try:
+                        from reportlab.lib.pagesizes import A4, landscape
+                        from reportlab.lib import colors
+                        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+                        from reportlab.lib.units import mm
+                        from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+                        from reportlab.lib.enums import TA_LEFT
+                        import io
+                        buf = io.BytesIO()
+                        doc = SimpleDocTemplate(buf, pagesize=landscape(A4),
+                                                leftMargin=12*mm, rightMargin=12*mm,
+                                                topMargin=15*mm, bottomMargin=15*mm)
+                        styles = getSampleStyleSheet()
+                        cell_style = ParagraphStyle("cell", parent=styles["Normal"],
+                                                    fontSize=7, leading=9, wordWrap="CJK")
+                        hdr_style  = ParagraphStyle("hdr",  parent=styles["Normal"],
+                                                    fontSize=7, leading=9, textColor=colors.white,
+                                                    fontName="Helvetica-Bold")
+                        elements = []
+                        # Title
+                        title_p = Paragraph(
+                            f"<b>Checklist Report — {audit.get('title','')} | {audit.get('audited_department','')}</b>",
+                            ParagraphStyle("title", parent=styles["Normal"], fontSize=11, leading=14, spaceAfter=6)
+                        )
+                        elements.append(title_p)
+                        elements.append(Spacer(1, 4*mm))
+                        # Table header
+                        col_names = ["Section", "Question", "Observation", "Evidence", "Clause No.", "Sub-Clause No."]
+                        col_widths = [28*mm, 75*mm, 52*mm, 52*mm, 28*mm, 32*mm]
+                        table_data = [[Paragraph(c, hdr_style) for c in col_names]]
+                        for _, row in df.iterrows():
+                            table_data.append([Paragraph(str(row[c] or ""), cell_style) for c in col_names])
+                        tbl = Table(table_data, colWidths=col_widths, repeatRows=1)
+                        tbl.setStyle(TableStyle([
+                            ("BACKGROUND",   (0,0), (-1,0),  colors.HexColor("#0f2347")),
+                            ("TEXTCOLOR",    (0,0), (-1,0),  colors.white),
+                            ("ROWBACKGROUNDS",(0,1),(-1,-1), [colors.white, colors.HexColor("#f0f4ff")]),
+                            ("GRID",         (0,0), (-1,-1), 0.3, colors.HexColor("#dde3ef")),
+                            ("VALIGN",       (0,0), (-1,-1), "TOP"),
+                            ("LEFTPADDING",  (0,0), (-1,-1), 4),
+                            ("RIGHTPADDING", (0,0), (-1,-1), 4),
+                            ("TOPPADDING",   (0,0), (-1,-1), 3),
+                            ("BOTTOMPADDING",(0,0), (-1,-1), 3),
+                        ]))
+                        elements.append(tbl)
+                        doc.build(elements)
+                        buf.seek(0)
+                        return buf.read(), None
+                    except ImportError:
+                        return None, "reportlab not installed"
+                    except Exception as ex:
+                        return None, str(ex)
+
+                _pdf_bytes, _pdf_err = _build_checklist_pdf(_exp_audit, _exp_df)
+                if _pdf_bytes:
+                    _ec2.download_button(
+                        label="⬇ Download PDF",
+                        data=_pdf_bytes,
+                        file_name=f"checklist_{_exp_audit_id[:8]}.pdf",
+                        mime="application/pdf",
+                        key="export_pdf_btn",
+                        use_container_width=True,
+                    )
                 else:
-                    st.error(msg)
+                    _ec2.warning(f"PDF unavailable: {_pdf_err}")
 
         st.divider()
 

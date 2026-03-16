@@ -1402,6 +1402,7 @@ def get_checklist_rows_for_audit_section(audit_id: str, dept: str, section: str,
                 "checklist":    str(r.get("checklist", "")).strip(),
                 "observation":  str(r.get("observation", "") or "").strip(),
                 "evidence":     str(r.get("evidence", "") or "").strip(),
+                "clause_no":    str(r.get("clause_no", "") or "").strip(),
                 "item_level":   str(r.get("item_level", "main") or "main").strip() or "main",
                 "parent_order": _norm_parent(r.get("parent_order")),
             })
@@ -1416,7 +1417,7 @@ def get_checklist_rows_for_audit_section(audit_id: str, dept: str, section: str,
                 for r in out:
                     key = " ".join(str(r.get("checklist", "")).split()).lower()
                     if key:
-                        ans_map[key] = {"observation": r.get("observation", ""), "evidence": r.get("evidence", "")}
+                        ans_map[key] = {"observation": r.get("observation", ""), "evidence": r.get("evidence", ""), "clause_no": r.get("clause_no", "")}
     
                 rebuilt: List[Dict[str, Any]] = []
                 for it in hier_items:
@@ -1428,6 +1429,7 @@ def get_checklist_rows_for_audit_section(audit_id: str, dept: str, section: str,
                         "checklist":    txt,
                         "observation":  str(prev.get("observation", "") or "").strip(),
                         "evidence":     str(prev.get("evidence", "") or "").strip(),
+                        "clause_no":    str(prev.get("clause_no", "") or "").strip(),
                         "item_level":   str(it.get("item_level", "main") or "main").strip() or "main",
                         "parent_order": _norm_parent(it.get("parent_order")),
                     })
@@ -1511,7 +1513,7 @@ def get_checklist_progress(audit_id: str, dept: str, section: str, *, tenant_id:
         "total_rows":       len(rows),
     }
 
-def save_single_checklist_response(audit_id: str, dept: str, section: str, sr_no: str, observation: str, evidence: str, *, auditor_name: Optional[str] = None, tenant_id: Optional[str] = None) -> Tuple[bool, str]:
+def save_single_checklist_response(audit_id: str, dept: str, section: str, sr_no: str, observation: str, evidence: str, *, clause_no: str = "", auditor_name: Optional[str] = None, tenant_id: Optional[str] = None) -> Tuple[bool, str]:
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
     sr_no_s = str(sr_no or "").strip()
     if not sr_no_s: return False, "sr_no is required."
@@ -1524,6 +1526,7 @@ def save_single_checklist_response(audit_id: str, dept: str, section: str, sr_no
     # checklist text, sr_no) are preserved exactly as loaded from DB/catalog.
     rows[idx]["observation"]  = str(observation or "").strip()
     rows[idx]["evidence"]     = str(evidence or "").strip()
+    rows[idx]["clause_no"]    = str(clause_no or "").strip()
     # Normalize hierarchy fields before writing back (guards against stale None types)
     rows[idx]["item_level"]   = str(rows[idx].get("item_level","main") or "main").strip() or "main"
     rows[idx]["parent_order"] = _norm_parent(rows[idx].get("parent_order"))
