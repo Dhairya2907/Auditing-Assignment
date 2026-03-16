@@ -2387,6 +2387,19 @@ def page_admin_checklist():
         with cC:
             st.info("Tip: Add main questions first (item order auto-assigned 1,2,3…). Then add sub-questions with Level=sub and Parent Q# pointing to the main question's row number.")
 
+def _render_node_text(text: str) -> str:
+    """If text has a colon followed by semicolon-separated items, render as bullet list."""
+    if ":" in text:
+        head, _, rest = text.partition(":")
+        items = [i.strip() for i in rest.split(";") if i.strip()]
+        if len(items) >= 2:
+            bullets = "".join(f"<li>{item}</li>" for item in items)
+            return (
+                f'<span style="font-weight:700;">{head.strip()}:</span>'
+                f'<ul style="margin:4px 0 0 0;padding-left:18px;">{bullets}</ul>'
+            )
+    return text
+
 def page_auditor_checklist():
     """
     Auditor Checklist — redesigned flow
@@ -2740,7 +2753,7 @@ def page_auditor_checklist():
                 f'<div class="ck-badge {badge_cls}">{label}</div>'
                 f'<div style="flex:1">'
                 f'<div class="ck-node-lbl">{lbl_text}</div>'
-                f'<div class="ck-node-txt">{node_text}</div>'
+                f'<div class="ck-node-txt">{_render_node_text(node_text)}</div>'
                 f'</div>'
                 f'{tick_html}'
                 f'</div>',
@@ -2748,12 +2761,15 @@ def page_auditor_checklist():
 
             # ── answer form — only for active node ────────────────────────────
             if is_active:
-                obs_k = f"ck_obs::{audit_id}::{section}::{node_sr}"
-                ev_k  = f"ck_ev::{audit_id}::{section}::{node_sr}"
+                obs_k    = f"ck_obs::{audit_id}::{section}::{node_sr}"
+                ev_k     = f"ck_ev::{audit_id}::{section}::{node_sr}"
+                clause_k = f"ck_clause::{audit_id}::{section}::{node_sr}"
                 if obs_k not in st.session_state:
-                    st.session_state[obs_k] = str(node.get("observation","") or "")
+                    st.session_state[obs_k]    = str(node.get("observation","") or "")
                 if ev_k not in st.session_state:
-                    st.session_state[ev_k]  = str(node.get("evidence","") or "")
+                    st.session_state[ev_k]     = str(node.get("evidence","") or "")
+                if clause_k not in st.session_state:
+                    st.session_state[clause_k] = str(node.get("clause_no","") or "")
 
                 ml = {"main": 0, "sub": 24, "subsub": 48}.get(node_lvl, 0)
                 st.markdown(f'<div class="ck-form" style="margin-left:{ml}px">',
@@ -2764,6 +2780,9 @@ def page_auditor_checklist():
                                         height=90, disabled=not can_edit)
                 ev  = col_ev.text_area("Evidence *",     key=ev_k,
                                         height=90, disabled=not can_edit)
+
+                clause_no = st.text_input("Clause No.", key=clause_k,
+                                          disabled=not can_edit)
 
                 is_last = (ni == len(walk) - 1)
                 btn_lbl  = "✅ Save & Finish" if is_last else "Save & Next ➜"
@@ -2779,12 +2798,14 @@ def page_auditor_checklist():
                                 "save_single_checklist_response",
                                 audit_id=audit_id, dept=dept, section=section,
                                 sr_no=node_sr, observation=obs, evidence=ev,
+                                clause_no=str(clause_no or "").strip(),
                                 auditor_name=person_name)
                             if not ok:
                                 st.error(msg)
                             else:
-                                st.session_state.pop(obs_k, None)
-                                st.session_state.pop(ev_k,  None)
+                                st.session_state.pop(obs_k,    None)
+                                st.session_state.pop(ev_k,     None)
+                                st.session_state.pop(clause_k, None)
                                 if is_last:
                                     # all nodes done → back to main list
                                     st.session_state[main_key] = None
