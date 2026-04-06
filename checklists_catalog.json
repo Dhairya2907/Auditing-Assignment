@@ -58,6 +58,34 @@
     "Regulatory & QMS Awareness": [
       "Are personnel aware of applicable regulatory/QMS requirements relevant to their roles?",
       "Is awareness training conducted for changes to procedures or regulations?"
+    ],
+    "Skills & Competency Identification": [
+      "Is a competency matrix or equivalent maintained that maps each role to required competencies?",
+      "Are competency requirements reviewed and updated when processes, regulations, or products change?",
+      "Is a risk-based approach followed to identify which competencies are critical to product safety and performance?",
+      "Are competency requirements linked to specific process steps (e.g., clause 7.5 production and service provision)?"
+    ],
+    "Gap Identification": [
+      "Is a training need analysis or gap assessment conducted at planned intervals?",
+      "Are gap assessments linked to specific process requirements (e.g., production, inspection, testing)?",
+      "Is the gap identification process documented as part of the QMS procedures?",
+      "Are the results of gap assessments used as input into the annual training plan?",
+      "Are methods to fill gaps in skills and competencies documented and followed?"
+    ],
+    "Competence Impact on Production (Clause 7.5)": [
+      "Is there evidence that personnel performing production and service provision activities are trained and qualified?",
+      "Are operator qualification records current and linked to specific SOPs?",
+      "Is there a system to prevent unqualified personnel from performing critical production tasks?"
+    ],
+    "Internal Audit Competence (Clause 8.2.4)": [
+      "Are internal auditors qualified based on defined competence criteria?",
+      "Are auditor qualification records maintained and reviewed periodically?",
+      "Is auditor independence ensured (auditors shall not audit their own work)?"
+    ],
+    "Document & Record Control (HR)": [
+      "Are HR documents (procedures, competency matrices) controlled per clause 4.2.4?",
+      "Are training and competency records maintained per clause 4.2.5?",
+      "Are electronic training records maintained with appropriate access controls and audit trails?"
     ]
   },
   "MR": {
@@ -174,23 +202,22 @@
   },
   "Production": {
     "BMR": [
-                "PICK UP A BATCH MANUFACTURING RECORD (BMR)",
-                "Are the following details available – batch number, manufacturing start and completion date?",
-                "Are raw material lot numbers mentioned?",
-                "Check for the Certificate of Analysis (COA) of the Raw Materials",
-                "Does the COA give test names, specified and achieved results",
-                "Check the Quality Assurance Plan (QAP)",
-                "Does the QAP give details such test stage, test name, method, sample size, acceptance criteria?",
-                "Are the quantities produced and rejected mentioned in the BMR?",
-                "Is a NCR form filled out in case of rejections?",
-                "Is the NCR report approved by the designated authority?",
-                "Are the instrument IDs mentioned in the BMR?",
-                "Check the calibration log and report of the instruments.",
-                "Do the calibration reports mention name of an accredited lab",
-                "Do the calibration reports mention traceability to national or international standards?"
-
-            ]
-},
+      "PICK UP A BATCH MANUFACTURING RECORD (BMR)",
+      "Are the following details available – batch number, manufacturing start and completion date?",
+      "Are raw material lot numbers mentioned?",
+      "Check for the Certificate of Analysis (COA) of the Raw Materials",
+      "Does the COA give test names, specified and achieved results",
+      "Check the Quality Assurance Plan (QAP)",
+      "Does the QAP give details such test stage, test name, method, sample size, acceptance criteria?",
+      "Are the quantities produced and rejected mentioned in the BMR?",
+      "Is a NCR form filled out in case of rejections?",
+      "Is the NCR report approved by the designated authority?",
+      "Are the instrument IDs mentioned in the BMR?",
+      "Check the calibration log and report of the instruments.",
+      "Do the calibration reports mention name of an accredited lab",
+      "Do the calibration reports mention traceability to national or international standards?"
+    ]
+  },
   "Purchase and Supplier": {
     "Supplier Selection": [
       "Is supplier selection initiated when a new material, component, or service is required?",
@@ -234,6 +261,17 @@
     "Supplier Re-evaluation": [
       "Is re-evaluation initiated based on performance monitoring results?",
       "Are re-evaluation outcomes documented?"
+    ],
+    "Supplier Rating & Risk-Based Control": [
+      "Is a documented supplier rating method in place based on risk-based approach?",
+      "Are rating parameters defined (quality, delivery, responsiveness, regulatory compliance)?",
+      "Are supplier control methods proportionate to the risk associated with the medical device?",
+      "Is non-fulfilment of purchasing requirements addressed proportionate to the risk (clause 7.4.1)?"
+    ],
+    "Document & Record Control (Purchase)": [
+      "Are purchasing documents (procedures, specifications, ASL) controlled per clause 4.2.4?",
+      "Are purchasing records maintained per clause 4.2.5?",
+      "Is the retention period for purchasing records defined in accordance with regulatory requirements?"
     ]
   }
 }

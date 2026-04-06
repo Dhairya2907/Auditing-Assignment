@@ -322,6 +322,7 @@ create table if not exists audits (
   closed_at timestamptz,
   checklists_json text not null default '{}',
   checklist_extras_json text not null default '{}',
+  pre_audit_answers_json text not null default '{}',
   plan_slot_notes text
 );
 create index if not exists idx_audits_tenant on audits(tenant_id);
@@ -487,6 +488,7 @@ def migrate_db() -> None:
             ("audits", "auditor_level",          "text not null default ''"),
             ("audits", "checklists_json",         "text not null default '{}'"),
             ("audits", "checklist_extras_json",   "text not null default '{}'"),
+            ("audits", "pre_audit_answers_json",  "text not null default '{}'"),
             ("audits", "plan_slot_notes",         "text"),
             ("checklists_catalog", "item_level",  "text not null default 'main'"),
             ("checklists_catalog", "parent_order","integer"),
@@ -533,6 +535,8 @@ def migrate_db() -> None:
     try: _ensure_column("audits", "checklists_json",       "text not null default '{}'")
     except Exception: pass
     try: _ensure_column("audits", "checklist_extras_json", "text not null default '{}'")
+    except Exception: pass
+    try: _ensure_column("audits", "pre_audit_answers_json", "text not null default '{}'")
     except Exception: pass
     try: _ensure_column("audits", "plan_slot_notes",       "text")
     except Exception: pass
@@ -669,108 +673,481 @@ def get_checklist_catalog(tenant_id: Optional[str] = None) -> Dict[str, Dict[str
     return out
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# HARDCODED CHECKLIST CATALOG
-# All checklist questions live here in code — NOT in the database.
-# Structure: { "Department": { "Section": [ {item_order, item_text, item_level, parent_order} ] } }
-# item_level: "main" = visible to auditor as top-level question
-#             "sub"  = sub-question under a main (revealed after main is selected)
-# parent_order: item_order of the parent main question (None for main questions)
+# ISO 13485:2016 CLAUSE-DRIVEN DYNAMIC QUESTION GENERATION
+# Questions are generated based on 4 pre-audit answers (Yes/No)
+# and reference specific ISO 13485 clauses.
 # ═══════════════════════════════════════════════════════════════════════════════
+
+# ── Pre-audit classification questions ────────────────────────────────────────
+PRE_AUDIT_QUESTIONS = [
+    {"id": "is_implantable", "text": "Is the product an implantable medical device?",
+     "clause_ref": "3.6, 7.5.9.2, 8.2.6"},
+    {"id": "is_sterile", "text": "Is the product a sterile medical device?",
+     "clause_ref": "3.20, 7.5.2, 7.5.5, 7.5.6, 7.5.7"},
+    {"id": "requires_installation", "text": "Does the product require installation?",
+     "clause_ref": "7.5.3"},
+    {"id": "requires_servicing", "text": "Does the product require servicing?",
+     "clause_ref": "7.5.4"},
+]
+
+# ── Production question bank ────────────────────────────────────────────────
+_ISO_CLAUSE_QUESTIONS: List[Dict[str, Any]] = [
+    {"clause": "7.5.1(a)", "condition": "always", "section": "Production Control",
+     "main": "Are documented procedures and methods for the control of production available and followed?",
+     "subs": ["Is there a documented production procedure or work instruction for this product?",
+              "Is the current revision of the procedure available at the point of use?",
+              "Are operators following the documented procedure as observed during the audit?"]},
+    {"clause": "7.5.1(b)", "condition": "always", "section": "Production Control",
+     "main": "Is the infrastructure qualified for the production of this medical device?",
+     "subs": ["Is there evidence of equipment qualification such as IQ, OQ, or PQ for critical production equipment?",
+              "Are qualification records current and approved?"]},
+    {"clause": "7.5.1(c)", "condition": "always", "section": "Production Control",
+     "main": "Is monitoring and measurement of process parameters and product characteristics implemented?",
+     "subs": ["Are in-process monitoring parameters defined and recorded?",
+              "Are acceptance criteria documented for each monitoring point?",
+              "Are out-of-specification results investigated and documented?"]},
+    {"clause": "7.5.1(d)", "condition": "always", "section": "Production Control",
+     "main": "Are monitoring and measuring equipment available and used as required?",
+     "subs": ["Is the measuring equipment identified and within its calibration validity period?",
+              "Is the calibration status clearly visible on the equipment label or tag?"]},
+    {"clause": "7.5.1(e)", "condition": "always", "section": "Production Control",
+     "main": "Are defined operations for labelling and packaging implemented?",
+     "subs": ["Is the labelling verified against the approved label artwork before application?",
+              "Is there a label reconciliation for issued, used, and destroyed labels?",
+              "Does the label include all mandatory regulatory information such as UDI, symbols, and expiry?"]},
+    {"clause": "7.5.1(f)", "condition": "always", "section": "Production Control",
+     "main": "Are product release, delivery, and post-delivery activities implemented as defined?",
+     "subs": ["Is there documented evidence that all release criteria were met before product dispatch?",
+              "Is the identity of the person authorizing release recorded?"]},
+    {"clause": "7.5.1", "condition": "always", "section": "Production Control",
+     "main": "Is a record established and maintained for each batch that provides traceability and identifies the amount manufactured and approved for distribution?",
+     "subs": ["Does the batch record include the batch or lot number and manufacturing dates?",
+              "Is the quantity manufactured versus quantity approved for distribution recorded and reconciled?",
+              "Is the batch record verified and approved by authorized personnel?"]},
+    {"clause": "4.2.4", "condition": "always", "section": "Document Control",
+     "main": "Are documents required by the quality management system controlled per clause 4.2.4?",
+     "subs": ["Are production documents reviewed and approved for adequacy prior to issue?",
+              "Is the current revision status of documents identified and available at points of use?",
+              "Are obsolete documents prevented from unintended use?",
+              "Is there a master list or equivalent document control system showing current document revisions?"]},
+    {"clause": "4.2.5", "condition": "always", "section": "Record Control",
+     "main": "Are records maintained to provide evidence of conformity to requirements per clause 4.2.5?",
+     "subs": ["Are production records legible, readily identifiable, and retrievable?",
+              "Is the retention time for production records defined and compliant with regulatory requirements?",
+              "Are records stored securely to prevent damage, deterioration, or loss?",
+              "Are methods defined for protecting confidential health information in records?"]},
+    {"clause": "7.5.9.2", "condition": "is_implantable", "section": "Implantable Device Traceability",
+     "main": "Are traceability records maintained for components, materials, and conditions of the work environment used for this implantable device?",
+     "subs": ["Do traceability records include records of components and materials used in this batch?",
+              "Are conditions of the work environment recorded if they could affect the device meeting its safety and performance requirements?",
+              "Are suppliers of distribution services or distributors required to maintain records for traceability?",
+              "Are records of the name and address of the shipping package consignee maintained?"]},
+    {"clause": "8.2.6", "condition": "is_implantable", "section": "Implantable Device Inspection",
+     "main": "Is the identity of personnel performing any inspection or testing of this implantable device recorded?",
+     "subs": ["Does the inspection record identify the specific person who performed the test?",
+              "Is there documented evidence that all acceptance criteria were met at each inspection stage?",
+              "Is the test equipment used for measurement activities identified in the records?"]},
+    {"clause": "7.5.2", "condition": "is_sterile", "section": "Sterile Product Cleanliness",
+     "main": "Are requirements for cleanliness of product documented as required before sterilization?",
+     "subs": ["Is there a documented cleaning procedure for the product prior to sterilization?",
+              "Are cleaning validation records available and current?",
+              "Are process agents removed from the product during manufacture as documented?"]},
+    {"clause": "7.5.5", "condition": "is_sterile", "section": "Sterilization Records",
+     "main": "Are records of sterilization process parameters maintained for each sterilization batch?",
+     "subs": ["Are sterilization records traceable to each production batch of medical devices?",
+              "Do sterilization records include all defined critical process parameters such as temperature, time, and pressure?",
+              "Are sterilization cycle records reviewed and approved by authorized personnel?"]},
+    {"clause": "7.5.6", "condition": "is_sterile", "section": "Process Validation (Sterile)",
+     "main": "Are processes for production validated where the resulting output cannot be verified by subsequent monitoring or measurement?",
+     "subs": ["Is there a documented validation protocol with defined criteria for review and approval?",
+              "Is equipment qualification and qualification of personnel documented?",
+              "Are specific methods, procedures, and acceptance criteria documented?",
+              "Are revalidation criteria defined and followed?",
+              "Are records of validation results and conclusions maintained?"]},
+    {"clause": "7.5.7", "condition": "is_sterile", "section": "Sterilization Validation",
+     "main": "Are processes for sterilization and sterile barrier systems validated prior to implementation?",
+     "subs": ["Is there a documented procedure for validation of sterilization processes?",
+              "Is the sterilization validation report approved and current?",
+              "Has revalidation been performed following any product or process changes?",
+              "Are results and conclusions of validation maintained as records?"]},
+    {"clause": "7.5.3", "condition": "requires_installation", "section": "Installation Activities",
+     "main": "Are requirements for medical device installation and acceptance criteria for verification of installation documented?",
+     "subs": ["If installation is performed by an external party, are documented requirements provided to them?",
+              "Are records of medical device installation and verification of installation maintained?",
+              "Do installation records confirm that all acceptance criteria were met?"]},
+    {"clause": "7.5.4", "condition": "requires_servicing", "section": "Servicing Activities",
+     "main": "Are servicing procedures, reference materials, and reference measurements documented as necessary?",
+     "subs": ["Are records of servicing activities analysed to determine if the information should be handled as a complaint?",
+              "Are servicing records used as input to the improvement process where appropriate?",
+              "Are records of servicing activities carried out by the organization or its supplier maintained?"]},
+    {"clause": "7.5.6", "condition": "always", "section": "Process Validation",
+     "main": "Are production processes validated where the resulting output cannot be verified by subsequent monitoring or measurement?",
+     "subs": ["Are validation procedures documented with defined criteria for review and approval of the processes?",
+              "Is there documented evidence of equipment qualification and personnel qualification?",
+              "Are specific methods, procedures, and acceptance criteria used for validation?",
+              "Are revalidation criteria defined, including when revalidation is triggered?"]},
+    {"clause": "7.5.8", "condition": "always", "section": "Product Identification",
+     "main": "Is the product identified by suitable means throughout product realization?",
+     "subs": ["Is product status with respect to monitoring and measurement requirements identified throughout production, storage, installation, and servicing?",
+              "Is there a system to assign unique device identification if required by regulatory requirements?",
+              "Are procedures documented to ensure returned medical devices are identified and distinguished from conforming product?"]},
+    {"clause": "7.5.9.1", "condition": "always", "section": "Traceability",
+     "main": "Are procedures for traceability documented defining the extent of traceability in accordance with applicable regulatory requirements?",
+     "subs": ["Are traceability records maintained as required?",
+              "Can the product be traced from raw material receipt through production to distribution?"]},
+    {"clause": "7.5.10", "condition": "always", "section": "Customer Property",
+     "main": "Is customer property identified, verified, protected, and safeguarded while under the organization's control?",
+     "subs": ["If any customer property is lost, damaged, or found unsuitable for use, is it reported to the customer and are records maintained?"]},
+    {"clause": "7.5.11", "condition": "always", "section": "Product Preservation",
+     "main": "Are procedures for preserving the conformity of product during processing, storage, handling, and distribution documented?",
+     "subs": ["Is suitable packaging and shipping container design defined?",
+              "Are requirements for special conditions documented if packaging alone cannot provide preservation?",
+              "Are special conditions controlled and recorded if required?"]},
+    {"clause": "7.6", "condition": "always", "section": "Monitoring & Measuring Equipment",
+     "main": "Is monitoring and measuring equipment calibrated or verified at specified intervals or prior to use against measurement standards traceable to international or national standards?",
+     "subs": ["Are calibration or verification results recorded?",
+              "Is the equipment adjusted or re-adjusted as necessary with adjustments recorded?",
+              "Is the equipment identified to determine its calibration status?",
+              "Is the equipment safeguarded from adjustments that would invalidate the measurement result?",
+              "Is the equipment protected from damage and deterioration during handling, maintenance, and storage?",
+              "Is the validity of previous measuring results assessed and recorded when equipment is found not conforming to requirements?"]},
+    {"clause": "8.2.6", "condition": "always", "section": "Product Monitoring & Measurement",
+     "main": "Are the characteristics of the product monitored and measured to verify that product requirements have been met?",
+     "subs": ["Is this carried out at applicable stages of the product realization process in accordance with planned and documented arrangements?",
+              "Is evidence of conformity to acceptance criteria maintained with the identity of the person authorizing release recorded?",
+              "Does product release proceed only after planned and documented arrangements have been satisfactorily completed?"]},
+    {"clause": "8.3.1", "condition": "always", "section": "Nonconforming Product Control",
+     "main": "Is product that does not conform to product requirements identified and controlled to prevent its unintended use or delivery?",
+     "subs": ["Is there a documented procedure defining controls, responsibilities, and authorities for identification, documentation, segregation, evaluation, and disposition of nonconforming product?",
+              "Is the evaluation of nonconformity including determination of the need for investigation documented?",
+              "Are records of the nature of nonconformities, subsequent actions taken, evaluations, investigations, and rationale for decisions maintained?"]},
+    {"clause": "8.3.2", "condition": "always", "section": "Nonconforming Product Control",
+     "main": "Are nonconforming products detected before delivery dealt with by taking action to eliminate the detected nonconformity, preclude its original intended use, or authorize its use under concession?",
+     "subs": ["Is nonconforming product accepted by concession only when justification is provided, approval is obtained, and applicable regulatory requirements are met?",
+              "Are records of acceptance by concession and the identity of the person authorizing the concession maintained?"]},
+    {"clause": "8.3.3", "condition": "always", "section": "Nonconforming Product Control",
+     "main": "When nonconforming product is detected after delivery or use has started, is action taken appropriate to the effects of the nonconformity?",
+     "subs": ["Are procedures for issuing advisory notices documented in accordance with applicable regulatory requirements?",
+              "Are records of actions relating to the issuance of advisory notices maintained?"]},
+]
+
+_DEPARTMENT_DIRECT_CHECKLISTS: Dict[str, List[Dict[str, Any]]] = {
+    "purchase": [
+        {"clause": "7.4.1", "section": "Supplier Selection and Evaluation",
+         "main": "Is the supplier selection criteria defined using a documented risk-based approach?",
+         "subs": ["Are suppliers classified based on product or process risk?",
+                  "Does the selection criteria consider impact on device quality, patient safety, and regulatory compliance?",
+                  "Is the rationale for supplier approval documented before the supplier is added to the approved supplier list?"]},
+        {"clause": "7.4.1", "section": "Supplier Selection and Evaluation",
+         "main": "Is the supplier rating method defined and implemented using a risk-based approach?",
+         "subs": ["Are rating parameters such as quality, delivery, responsiveness, and certification status weighted according to supplier risk?",
+                  "Are critical suppliers reviewed more rigorously or more frequently than low-risk suppliers?",
+                  "Are supplier rating results used to determine approval status, intensified control, or disqualification?"]},
+        {"clause": "7.4.1", "section": "Supplier Selection and Evaluation",
+         "main": "Are supplier control methods defined according to supplier risk and purchased product criticality?",
+         "subs": ["Are controls such as audits, incoming inspection, certificate review, or first article verification selected based on risk?",
+                  "Are changes to supplier controls triggered by poor performance, complaints, or nonconformities?",
+                  "Are outsourced processes controlled at a level proportionate to their effect on product conformity?"]},
+        {"clause": "7.4.1", "section": "Supplier Agreements and Controls",
+         "main": "Are supplier quality agreements established where required?",
+         "subs": ["Do supplier quality agreements clearly define quality responsibilities, change notification, and record retention requirements?",
+                  "Are agreements in place for critical suppliers or outsourced processes affecting conformity of the medical device?",
+                  "Are agreements reviewed and approved by authorized personnel before use?"]},
+        {"clause": "4.2.4", "section": "Document Control",
+         "main": "Are supplier qualification, rating, and control procedures documented and controlled?",
+         "subs": ["Are current revisions of supplier evaluation procedures available to the purchasing and quality teams?",
+                  "Are obsolete supplier forms or approval criteria prevented from unintended use?"]},
+        {"clause": "4.2.5", "section": "Record Control",
+         "main": "Are supplier evaluation, approval, and monitoring records maintained and retrievable?",
+         "subs": ["Are records retained for the required retention period?",
+                  "Can the organization retrieve supplier approval history, audit reports, and rating trends when needed?"]},
+        {"clause": "7.4.2", "section": "Purchasing Information and Orders",
+         "main": "Is there a documented purchasing procedure defining how purchasing information is prepared, reviewed, and communicated to suppliers?",
+         "subs": ["Does the procedure define required information such as specifications, drawings, acceptance criteria, and quality requirements?",
+                  "Are applicable regulatory or quality management requirements communicated to suppliers where necessary?"]},
+        {"clause": "7.4.2", "section": "Purchasing Information and Orders",
+         "main": "Are purchase orders reviewed and approved for adequacy before release to the supplier?",
+         "subs": ["Does the review verify that the purchase order matches approved specifications and supplier status?",
+                  "Are only authorized personnel allowed to approve or release purchase orders?",
+                  "Are changes to purchase orders reviewed and approved in the same controlled manner?"]},
+        {"clause": "7.5.1", "section": "Link to Production and Process Controls",
+         "main": "Does purchasing information support downstream production and service provision requirements under clause 7.5?",
+         "subs": ["Do purchased materials or outsourced services include requirements necessary for production control, validation, or preservation?",
+                  "Where special handling, cleanliness, or traceability is required, is it defined in the purchasing documentation?"]},
+        {"clause": "7.4.3", "section": "Incoming Inspection and Verification",
+         "main": "Are incoming inspection plans and verification methods defined according to the type and risk of purchased product?",
+         "subs": ["Do incoming inspection plans define sample size, inspection or test method, and acceptance criteria?",
+                  "Are verification methods appropriate for raw materials, components, labels, packaging, and outsourced services as applicable?",
+                  "Are critical purchased products subject to enhanced verification where risk justifies it?"]},
+        {"clause": "7.4.3", "section": "Incoming Inspection and Verification",
+         "main": "Are incoming inspection results documented and linked to disposition decisions?",
+         "subs": ["Are acceptance, rejection, deviation, or concession decisions documented for incoming materials?",
+                  "When incoming product fails requirements, is it controlled as nonconforming product under clause 8.3?"]},
+        {"clause": "8.2.5", "section": "Monitoring of Purchasing Process",
+         "main": "Is supplier performance monitored and analysed as part of process monitoring?",
+         "subs": ["Are trends such as on-time delivery, incoming rejection rate, and response to issues reviewed periodically?",
+                  "Are poor supplier performance trends escalated for action or management review when necessary?"]},
+        {"clause": "8.3", "section": "Nonconforming Purchased Product",
+         "main": "When purchased product does not meet requirements, is it identified and controlled to prevent unintended use?",
+         "subs": ["Are supplier-related nonconformities documented and investigated?",
+                  "Are supplier corrective actions requested when needed and is follow-up documented?"]},
+        {"clause": "8.4 / 8.5", "section": "Data Analysis and Improvement",
+         "main": "Are supplier performance data analysed and used to drive improvement?",
+         "subs": ["Does the organization use supplier rating, incoming inspection data, complaints, or NCR data to identify purchasing risks?",
+                  "Are actions arising from supplier performance analysis tracked to closure and checked for effectiveness?"]},
+    ],
+    "hr": [
+        {"clause": "6.2.2", "section": "Competence Framework",
+         "main": "Are necessary competence, skills, education, and experience defined for personnel performing work affecting product quality?",
+         "subs": ["Are role descriptions available and do they define responsibilities and competence requirements?",
+                  "Are roles and responsibilities communicated to relevant personnel?",
+                  "Are competence requirements linked to actual process responsibilities and risk to product quality?"]},
+        {"clause": "6.2.2", "section": "Competence Framework",
+         "main": "Does the organization have a defined method to identify skill and competency gaps?",
+         "subs": ["Are tools such as skill matrices, competency assessments, observation, audit findings, or performance reviews used to identify gaps?",
+                  "Are gaps identified during onboarding, role change, or periodic review?",
+                  "Are gaps documented and reviewed by responsible functions?"]},
+        {"clause": "6.2.2", "section": "Training and Gap Closure",
+         "main": "Does the organization have defined methods to fill identified competency gaps?",
+         "subs": ["Are training, coaching, qualification, supervised practice, or reassignment used as appropriate to close gaps?",
+                  "Are action plans documented with responsible person and target completion date?",
+                  "Is effectiveness of the gap-closing action evaluated after completion?"]},
+        {"clause": "6.2.2", "section": "Risk-Based Competence Planning",
+         "main": "Is a risk-based approach used when planning competency development or assigning personnel to activities?",
+         "subs": ["Are personnel performing high-risk or special process activities subject to stricter competence requirements?",
+                  "When competence gaps could affect product conformity or regulatory compliance, are interim controls defined?",
+                  "Is the level of training or qualification proportional to the impact of the role on process output?"]},
+        {"clause": "7.5.1 / 7.5.6", "section": "Link to Production and Service Provision",
+         "main": "Are competence requirements linked to activities under clause 7.5 where personnel performance can affect process output?",
+         "subs": ["For production, inspection, validation, servicing, or installation roles, is competency evidence available before independent work is allowed?",
+                  "Are only qualified personnel allowed to perform activities where output cannot be fully verified later?"]},
+        {"clause": "4.2.4", "section": "Document Control",
+         "main": "Are HR and training procedures, job descriptions, and competency criteria documented and controlled?",
+         "subs": ["Are current revisions available at point of use to managers and HR personnel?",
+                  "Are obsolete job descriptions, training forms, or competency criteria prevented from unintended use?"]},
+        {"clause": "4.2.5", "section": "Record Control",
+         "main": "Are records of education, training, skills, experience, and competency maintained and retrievable?",
+         "subs": ["Are training records complete with date, trainer, topic, and participant evidence?",
+                  "Are competency or qualification records retained for the required retention period?"]},
+        {"clause": "8.2.5", "section": "Process Monitoring",
+         "main": "Is the effectiveness of the competence and training process monitored?",
+         "subs": ["Are metrics such as training completion, overdue training, assessment results, or requalification status reviewed periodically?",
+                  "Are delays or failures in competency development escalated when they can affect process performance?"]},
+        {"clause": "8.2.6", "section": "Link to Product Quality",
+         "main": "Where human performance affects product conformity, is there evidence that competent personnel performed the relevant work or inspection?",
+         "subs": ["Can the organization identify who performed the work and whether the person was qualified at that time?",
+                  "Where required, are personnel identities captured in inspection, release, or batch records?"]},
+        {"clause": "8.4", "section": "Data Analysis",
+         "main": "Are data from audits, deviations, complaints, CAPAs, and performance reviews used to identify competence-related trends?",
+         "subs": ["Are recurring human error trends analysed to determine whether additional training or qualification controls are needed?",
+                  "Are competence-related issues reviewed in management review or process review meetings?"]},
+        {"clause": "8.5", "section": "Improvement",
+         "main": "When competence-related issues are identified, are corrective actions implemented and checked for effectiveness?",
+         "subs": ["Are root causes analysed before deciding retraining or other actions?",
+                  "Is recurrence checked after corrective action closure to confirm effectiveness?"]},
+    ],
+}
+
+_DEPARTMENT_GENERATOR_CONFIG: Dict[str, Dict[str, Any]] = {
+    "production": {
+        "mode": "pre_audit",
+        "title": "Pre-Audit Product Classification",
+        "description": "Answer the following 4 questions to generate your ISO 13485 production checklist. The checklist will be customized based on the product type.",
+        "button_label": "🚀 Generate Audit Checklist",
+    },
+    "purchase": {
+        "mode": "direct",
+        "title": "Purchase Checklist Generator",
+        "description": "Generate a clause-focused ISO 13485 purchase checklist covering supplier selection, supplier controls, purchase orders, incoming inspection, and linked document and record controls.",
+        "button_label": "🚀 Generate Purchase Checklist",
+        "focus_lines": [
+            "Primary focus: clauses 7.4.1, 7.4.2 and 7.4.3",
+            "Linked clauses: 4.2.4, 4.2.5, 7.5 and section 8",
+            "Includes supplier rating, supplier selection, supplier controls, supplier quality agreements, purchasing procedure, PO review, and incoming inspection methods",
+        ],
+    },
+    "hr": {
+        "mode": "direct",
+        "title": "HR Checklist Generator",
+        "description": "Generate a clause-focused ISO 13485 HR checklist covering competence, skills, gap identification, gap closure, risk-based competency planning, and links to process output.",
+        "button_label": "🚀 Generate HR Checklist",
+        "focus_lines": [
+            "Primary focus: clause 6.2.2",
+            "Linked clauses: 4.2.4, 4.2.5, 7.5 and section 8",
+            "Includes identification of skills and competencies, role definition, gap identification, gap closure, and risk-based approach",
+        ],
+    },
+}
+
+def _department_key(dept: str) -> str:
+    return _normalize_text(dept).lower()
+
+def get_department_generator_config(dept: str) -> Dict[str, Any]:
+    dep_key = _department_key(dept)
+    return dict(_DEPARTMENT_GENERATOR_CONFIG.get(dep_key, {
+        "mode": "none",
+        "title": "Checklist Generator",
+        "description": "No dynamic generator is configured for this department.",
+        "button_label": "Generate Checklist",
+        "focus_lines": [],
+    }))
+
+def get_pre_audit_questions() -> List[Dict[str, Any]]:
+    return list(PRE_AUDIT_QUESTIONS)
+
+def _append_hierarchical_items(target: List[Dict[str, Any]], rows: List[Dict[str, Any]], start_order: int = 0) -> int:
+    order = int(start_order)
+    for q_def in rows:
+        clause = q_def.get("clause", "")
+        section = q_def.get("section", "General")
+        main_text = q_def.get("main", "")
+        subs = q_def.get("subs", []) or []
+        order += 1
+        parent_order = order
+        target.append({
+            "item_order": order,
+            "item_text": main_text,
+            "item_level": "main",
+            "parent_order": None,
+            "clause_ref": clause,
+            "section": section,
+        })
+        for sub_text in subs:
+            order += 1
+            target.append({
+                "item_order": order,
+                "item_text": sub_text,
+                "item_level": "sub",
+                "parent_order": parent_order,
+                "clause_ref": clause,
+                "section": section,
+            })
+    return order
+
+def generate_checklist_from_pre_audit(pre_audit_answers: Dict[str, bool]) -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    order = 0
+    for q_def in _ISO_CLAUSE_QUESTIONS:
+        cond = q_def.get("condition", "always")
+        if cond == "always":
+            include = True
+        elif cond in pre_audit_answers:
+            include = bool(pre_audit_answers.get(cond, False))
+        else:
+            include = False
+        if not include:
+            continue
+        order = _append_hierarchical_items(items, [q_def], order)
+    return items
+
+def generate_department_checklist(dept: str, answers: Optional[Dict[str, bool]] = None) -> List[Dict[str, Any]]:
+    dep_key = _department_key(dept)
+    answers = answers or {}
+    if dep_key == "production":
+        return generate_checklist_from_pre_audit(answers)
+    direct_rows = _DEPARTMENT_DIRECT_CHECKLISTS.get(dep_key, [])
+    items: List[Dict[str, Any]] = []
+    _append_hierarchical_items(items, direct_rows, 0)
+    return items
+
+def _save_generated_items_to_audit(a: Dict[str, Any], dept: str, answers_payload: Dict[str, Any], generated_items: List[Dict[str, Any]], *, tenant_id: str) -> Tuple[bool, str]:
+    dept = _normalize_text(dept)
+    if not generated_items:
+        return False, f"No checklist blueprint configured for department '{dept}'."
+    sections_map: Dict[str, List[Dict[str, Any]]] = {}
+    for item in generated_items:
+        sec = item.get("section", "General")
+        sections_map.setdefault(sec, []).append(item)
+    checklists: Dict[str, Dict[str, List]] = a.get("checklists", {}) or {}
+    checklists[dept] = {}
+    for sec, sec_items in sections_map.items():
+        rows = []
+        for item in sec_items:
+            rows.append({
+                "sr_no": str(item["item_order"]),
+                "checklist": f"[{item['clause_ref']}] {item['item_text']}",
+                "observation": "",
+                "evidence": "",
+                "clause_no": item["clause_ref"],
+                "item_level": item["item_level"],
+                "parent_order": item["parent_order"],
+            })
+        checklists[dept][sec] = rows
+    a["pre_audit_answers"] = answers_payload
+    a["checklists"] = checklists
+    _save_updated_audit(a, tenant_id=tenant_id)
+    return True, f"Checklist generated with {len(generated_items)} questions across {len(sections_map)} sections."
+
+def save_generated_department_checklist(audit_id: str, answers: Optional[Dict[str, bool]] = None, *, tenant_id: Optional[str] = None) -> Tuple[bool, str]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    a = get_audit(audit_id, tenant_id=tenant_id)
+    if not a:
+        return False, "Audit not found."
+    dept = _normalize_text(a.get("audited_department", ""))
+    dep_key = _department_key(dept)
+    answers = answers or {}
+    if dep_key == "production":
+        return save_pre_audit_answers(audit_id, answers, tenant_id=tenant_id)
+    generated_items = generate_department_checklist(dept, answers)
+    answers_payload = {"generator_department": dep_key, "generated_at": _now_iso()}
+    return _save_generated_items_to_audit(a, dept, answers_payload, generated_items, tenant_id=tenant_id)
+
+def save_pre_audit_answers(
+    audit_id: str,
+    answers: Dict[str, bool],
+    *,
+    tenant_id: Optional[str] = None,
+) -> Tuple[bool, str]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    a = get_audit(audit_id, tenant_id=tenant_id)
+    if not a:
+        return False, "Audit not found."
+    dept = _normalize_text(a.get("audited_department", ""))
+    generated_items = generate_checklist_from_pre_audit(answers or {})
+    return _save_generated_items_to_audit(a, dept, answers or {}, generated_items, tenant_id=tenant_id)
+
+def get_pre_audit_answers(audit_id: str, *, tenant_id: Optional[str] = None) -> Optional[Dict[str, bool]]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    a = get_audit(audit_id, tenant_id=tenant_id)
+    if not a:
+        return None
+    return a.get("pre_audit_answers")
+
+def get_generated_sections(audit_id: str, dept: str, *, tenant_id: Optional[str] = None) -> List[str]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    a = get_audit(audit_id, tenant_id=tenant_id)
+    if not a:
+        return []
+    dept_n = _normalize_text(dept)
+    saved = (a.get("checklists") or {}).get(dept_n, {})
+    return list(saved.keys()) if isinstance(saved, dict) else []
+# ── Keep CHECKLIST_CATALOG minimal for backward compat ────────────────────────
 CHECKLIST_CATALOG: Dict[str, Dict[str, List[Dict[str, Any]]]] = {
-    "Production": {
-        "BMR": [
-            # Q1 — no sub-questions
-            {"item_order": 1,  "item_text": "Are the following details available – batch number, manufacturing start and completion date?", "item_level": "main", "parent_order": None},
-            # Q2 — 4 sub-questions
-            {"item_order": 2,  "item_text": "Are raw material lot numbers mentioned?",                                                       "item_level": "main", "parent_order": None},
-            {"item_order": 3,  "item_text": "Check for the Certificate of Analysis (COA) of the Raw Materials",                             "item_level": "sub",  "parent_order": 2},
-            {"item_order": 4,  "item_text": "Does the COA give test names, specified and achieved results",                                  "item_level": "sub",  "parent_order": 2},
-            {"item_order": 5,  "item_text": "Check the Quality Assurance Plan (QAP)",                                                        "item_level": "sub",  "parent_order": 2},
-            {"item_order": 6,  "item_text": "Does the QAP give details such as test stage, test name, method, sample size, acceptance criteria?", "item_level": "sub", "parent_order": 2},
-            # Q3 — 2 sub-questions
-            {"item_order": 7,  "item_text": "Are the quantities produced and rejected mentioned in the BMR?",                                "item_level": "main", "parent_order": None},
-            {"item_order": 8,  "item_text": "Is a NCR form filled out in case of rejections?",                                              "item_level": "sub",  "parent_order": 7},
-            {"item_order": 9,  "item_text": "Is the NCR report approved by the designated authority?",                                      "item_level": "sub",  "parent_order": 7},
-            # Q4 — 3 sub-questions
-            {"item_order": 10, "item_text": "Are the instrument IDs mentioned in the BMR?",                                                  "item_level": "main", "parent_order": None},
-            {"item_order": 11, "item_text": "Check the calibration log and report of the instruments.",                                     "item_level": "sub",  "parent_order": 10},
-            {"item_order": 12, "item_text": "Do the calibration reports mention name of an accredited lab",                                  "item_level": "sub",  "parent_order": 10},
-            {"item_order": 13, "item_text": "Do the calibration reports mention traceability to national or international standards?",       "item_level": "sub",  "parent_order": 10},
-        ],
-    },
-  "Purchase": {
-        "Approved Supplier & Incoming Inspection": [
-            # Q1 — main + 2 subs
-            {"item_order": 1, "item_text": "Identify a raw material lot number in the BMR; is the manufacturer of this lot on the Approved Supplier List (ASL)?",                                                                   "item_level": "main", "parent_order": None},
-            {"item_order": 2, "item_text": "If the supplier is on the ASL, is their Qualification Status current (e.g., is their ISO certificate or audit report still valid or supplier evaluation)?",                            "item_level": "sub",  "parent_order": 1},
-            {"item_order": 3, "item_text": "Does the Incoming Inspection Report for this lot show that all 'achieved results' on the CoA were verified against the internal specifications?",                                       "item_level": "sub",  "parent_order": 1},
-        ],
-          },
-    "HR": {
-        "Competency & Training (BMR Audit)": [
-            # Q1 — main + 4 subs
-            {"item_order": 1, "item_text": "For the operator who signed for a critical step (e.g., sterilization), is their name on the Competency Matrix for that process?",                                                       "item_level": "main", "parent_order": None},
-            {"item_order": 2, "item_text": "Confirm that the identified operator is listed in the competency matrix.",                                                                                                             "item_level": "sub",  "parent_order": 1},
-            {"item_order": 3, "item_text": "Verify that the specific process (e.g., sterilization, assembly, inspection) is included in the competency matrix.",                                                                   "item_level": "sub",  "parent_order": 1},
-            {"item_order": 4, "item_text": "Confirm that the operator is marked as competent / authorized for that process.",                                                                                                      "item_level": "sub",  "parent_order": 1},
-            {"item_order": 5, "item_text": "Verify the date of competency approval.",                                                                                                                                             "item_level": "sub",  "parent_order": 1},
-            # Q2 — main + 2 subs
-            {"item_order": 6, "item_text": "Was the operator's Training Record for the specific task performed present?",                                                                                                          "item_level": "main", "parent_order": None},
-            {"item_order": 7, "item_text": "If the SOP was updated recently, was the operator re-trained on the new version before this batch was started?",                                                                      "item_level": "sub",  "parent_order": 6},
-            {"item_order": 8, "item_text": "Is there evidence (e.g., a quiz or supervisor sign-off) that the training was effective?",                                                                                            "item_level": "sub",  "parent_order": 6},
-        ],
-          },
-    "Maintenance": {
-        "Infrastructure & Measuring Equipment": [
-            # Q1 — main + 3 subs
-            {"item_order": 1, "item_text": "Take the ID of the equipment used in the BMR; was it within its Calibration Date at the time of use?",                                                                                "item_level": "main", "parent_order": None},
-            {"item_order": 2, "item_text": "Does the Calibration Certificate for that specific ID show traceability to national or international standards (NIST/ISO)?",                                                           "item_level": "sub",  "parent_order": 1},
-            {"item_order": 3, "item_text": "Is there evidence that shows Preventive Maintenance (PM) was performed according to the schedule before this batch?",                                                                  "item_level": "sub",  "parent_order": 1},
-            {"item_order": 4, "item_text": "Does the equipment have IQ/OQ/PQ validation record?",                                                                                                                                 "item_level": "sub",  "parent_order": 1},
-        ],
-    },
-    "Quality Assurance": {
-        "Document Control, CAPA & Management Review": [
-            # Q1 — main + 1 sub
-            {"item_order": 1,  "item_text": "Is the BMR version used for this batch the most current approved version in the Document Control System?",                                                                            "item_level": "main", "parent_order": None},
-            {"item_order": 2,  "item_text": "Can this version be traced back to a specific Change Control record that explains why the previous version was retired?",                                                             "item_level": "sub",  "parent_order": 1},
-            # Q2 — main + 4 subs
-            {"item_order": 3,  "item_text": "Have any Customer Complaints been recorded?",                                                                                                                                        "item_level": "main", "parent_order": None},
-            {"item_order": 4,  "item_text": "Confirm whether any complaints are associated with the batch under audit.",                                                                                                          "item_level": "sub",  "parent_order": 3},
-            {"item_order": 5,  "item_text": "If a complaint related to this batch exists: was the complaint investigation completed within the defined timeline?",                                                                 "item_level": "sub",  "parent_order": 3},
-            {"item_order": 6,  "item_text": "Were any containment actions implemented for the complaint?",                                                                                                                        "item_level": "sub",  "parent_order": 3},
-            {"item_order": 7,  "item_text": "If complaint leads to CAPA — was any CAPA initiated?",                                                                                                                              "item_level": "sub",  "parent_order": 3},
-            {"item_order": 8,  "item_text": "Open the CAPA log and verify it was implemented and CAPA was closed.",                                                                                                              "item_level": "sub",  "parent_order": 3},
-            # Q3 — main + 3 subs (MRM)
-            {"item_order": 9,  "item_text": "Is MRM conducted as per the schedule?",                                                                                                                                             "item_level": "main", "parent_order": None},
-            {"item_order": 10, "item_text": "Verify the defined frequency of Management Review Meetings.",                                                                                                                        "item_level": "sub",  "parent_order": 9},
-            {"item_order": 11, "item_text": "Open minutes of the meeting (MoM) and confirm the following inputs were included: customer feedback; complaint handling; reporting to regulatory authorities; audits; monitoring and measurement of processes and product; corrective and preventive actions; follow-up from previous MRM; changes affecting the QMS; recommendations for improvement; applicable new or revised regulatory requirements.", "item_level": "sub", "parent_order": 9},
-            {"item_order": 12, "item_text": "Verify the assigned actions from MRM are documented with responsibilities and timelines.",                                                                                            "item_level": "sub",  "parent_order": 9},
-            # Q4 — main + 2 subs (Quality Objectives)
-            {"item_order": 13, "item_text": "Does the Quality Performance of this batch align with the Quality Objectives set for this production year?",                                                                         "item_level": "main", "parent_order": None},
-            {"item_order": 14, "item_text": "Open the Quality Objectives for the current production year and verify objectives are measurable.",                                                                                  "item_level": "sub",  "parent_order": 13},
-            {"item_order": 15, "item_text": "Verify the measurable targets and confirm that the batch performance aligns with the quality objectives.",                                                                           "item_level": "sub",  "parent_order": 13},
-        ],
-    },
-    "Sales and Marketing": {
-        "Customer Order Compliance": [
-            # Q1 — main only
-            {"item_order": 1, "item_text": "Does the finished product in this batch meet the specific requirements (e.g., custom labeling, language, or SKU) defined in the Customer's Purchase Order?",                          "item_level": "main", "parent_order": None},
-        ],
-    },
-    
+    "Production": {},
+    "Purchase": {},
+    "HR": {},
 }
 
 def _catalog_key(s: str) -> str:
     """Normalize department/section name for catalog lookup."""
     return " ".join(str(s or "").strip().split())
 
-def get_sections_for_department(dept: str, tenant_id: Optional[str] = None) -> List[str]:
-    """Return sections for a department — reads from hardcoded catalog first, DB as fallback."""
+def get_sections_for_department(dept: str, tenant_id: Optional[str] = None, audit_id: Optional[str] = None) -> List[str]:
+    """Return sections for a department — checks audit's generated checklist first, then DB fallback."""
+    # If audit_id is provided, check if the audit has dynamically generated sections
+    if audit_id:
+        try:
+            tid = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+            sections = get_generated_sections(audit_id, dept, tenant_id=tid)
+            if sections:
+                return sections
+        except Exception:
+            pass
+
     key = _catalog_key(dept)
     # Check hardcoded catalog
     for cat_dept, sections in CHECKLIST_CATALOG.items():
-        if _catalog_key(cat_dept) == key:
+        if _catalog_key(cat_dept) == key and sections:
             return list(sections.keys())
     # Fallback: DB (for admin-added custom sections)
     try:
@@ -1102,6 +1479,7 @@ def _row_to_audit(r: Dict[str, Any]) -> Dict[str, Any]:
         "closed_at":           str(r["closed_at"] or ""),
         "checklists":          json.loads(r.get("checklists_json") or "{}"),
         "checklist_extras":    json.loads(r.get("checklist_extras_json") or "{}"),
+        "pre_audit_answers":   json.loads(r.get("pre_audit_answers_json") or "{}"),
         "plan_slot_notes":     r.get("plan_slot_notes") or "",
     }
 
@@ -1126,6 +1504,7 @@ def _save_updated_audit(updated: Dict[str, Any], tenant_id: Optional[str] = None
     rep_json  = json.dumps(updated.get("reports", []) or [])
     chk_json  = json.dumps(updated.get("checklists", {}) or {})
     ext_json  = json.dumps(updated.get("checklist_extras", {}) or {})
+    pre_json  = json.dumps(updated.get("pre_audit_answers", {}) or {})
     notes     = updated.get("plan_slot_notes") or None
     aid       = updated.get("audit_id", "")
     exists    = _fetch_one("select audit_id from audits where tenant_id = ? and audit_id = ?;", (tenant_id, aid))
@@ -1134,24 +1513,25 @@ def _save_updated_audit(updated: Dict[str, Any], tenant_id: Optional[str] = None
             "update audits set title=?,scope=?,audited_department=?,required_skills_json=?,"
             "assigned_auditor=?,auditor_level=?,status=?,created_by=?,created_at=?,due_date=?,"
             "reports_json=?,report_submitted_at=?,closed_at=?,checklists_json=?,"
-            "checklist_extras_json=?,plan_slot_notes=? where audit_id=? and tenant_id=?;",
+            "checklist_extras_json=?,pre_audit_answers_json=?,plan_slot_notes=? where audit_id=? and tenant_id=?;",
             (updated.get("title",""), updated.get("scope",""), updated.get("audited_department",""),
              rsk_json, updated.get("assigned_auditor",""), updated.get("auditor_level",""),
              updated.get("status",""), updated.get("created_by",""), updated.get("created_at",_now_iso()),
              updated.get("due_date",""), rep_json, updated.get("report_submitted_at","") or None,
-             updated.get("closed_at","") or None, chk_json, ext_json, notes, aid, tenant_id))
+             updated.get("closed_at","") or None, chk_json, ext_json, pre_json, notes, aid, tenant_id))
     else:
         _execute(
             "insert into audits (audit_id,tenant_id,title,scope,audited_department,required_skills_json,"
             "assigned_auditor,auditor_level,status,created_by,created_at,due_date,reports_json,"
-            "report_submitted_at,closed_at,checklists_json,checklist_extras_json,plan_slot_notes) "
-            "values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);",
+            "report_submitted_at,closed_at,checklists_json,checklist_extras_json,pre_audit_answers_json,plan_slot_notes) "
+            "values (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);",
             (aid or _new_audit_id(), tenant_id, updated.get("title",""), updated.get("scope",""),
              updated.get("audited_department",""), rsk_json, updated.get("assigned_auditor",""),
              updated.get("auditor_level",""), updated.get("status","Assigned"), updated.get("created_by",""),
              updated.get("created_at",_now_iso()), updated.get("due_date",""), rep_json,
              updated.get("report_submitted_at","") or None, updated.get("closed_at","") or None,
-             chk_json, ext_json, notes))
+             chk_json, ext_json, pre_json, notes))
+
 
 def save_updated_audit(updated: Dict[str, Any], tenant_id: Optional[str] = None) -> None:
     _save_updated_audit(updated, tenant_id=tenant_id)
@@ -2000,3 +2380,629 @@ def auto_assign_auditors(tenant_id: str, plan_id: str) -> Tuple[bool, str]:
     try: _sync_plan_slots_to_audits(tenant_id, plan_id)
     except Exception: pass
     return True, f"Auto-assigned {changed} slot(s)."
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# SMART QUESTION GENERATION — FREE, NO API KEY NEEDED
+# Uses rule-based analysis of previous answers to generate follow-up questions
+# ══════════════════════════════════════════════════════════════════════════════
+
+import random as _random
+
+# ── Keyword-based gap detection rules ─────────────────────────────────────────
+_WEAKNESS_KEYWORDS = [
+    "not available", "not found", "missing", "no record", "no evidence",
+    "not maintained", "not documented", "not conducted", "not performed",
+    "not reviewed", "not applicable", "n/a", "na", "nil", "none",
+    "partially", "incomplete", "pending", "not yet", "in progress",
+    "not verified", "not validated", "not approved", "not signed",
+    "not calibrated", "expired", "overdue", "gap", "deviation",
+    "non-conformance", "non-conformity", "ncr", "observation",
+    "not compliant", "not aligned", "no procedure", "no sop",
+]
+
+_VAGUE_KEYWORDS = [
+    "ok", "fine", "good", "satisfactory", "adequate", "yes", "done",
+    "available", "maintained", "seen", "verified", "checked",
+]
+
+# ── Department-specific follow-up question templates (main + subs) ─────────────
+# Each entry: { "main": "...", "subs": ["...", "..."] }
+_DEPT_FOLLOWUP_TEMPLATES = {
+    "production": {
+        "record_accuracy": [
+            {"main": "Can you cross-verify the batch quantity recorded in the BMR against the actual weighing/dispensing log?",
+             "subs": ["Does the dispensing log show the tare weight, gross weight, and net weight for each raw material?",
+                      "Is there a reconciliation of theoretical vs. actual yield documented?",
+                      "Are any discrepancies between the BMR and weighing log explained with a deviation note?"]},
+            {"main": "Is the environmental monitoring data (temperature, humidity) recorded during this batch within specification?",
+             "subs": ["Are the environmental monitoring instruments calibrated and within validity?",
+                      "Is there an out-of-range alert or deviation report if any reading exceeded the limit?"]},
+            {"main": "Were any process deviations noted during this batch? If yes, is the deviation report attached?",
+             "subs": ["Is the deviation classified as critical, major, or minor as per the SOP?",
+                      "Is the root cause analysis documented for the deviation?",
+                      "Was the impact assessment on product quality completed before batch release?"]},
+            {"main": "Is the line clearance documented before batch start with all required checks?",
+             "subs": ["Does the line clearance checklist include equipment cleanliness, label removal, and area verification?",
+                      "Is the line clearance signed off by both the operator and the supervisor?"]},
+            {"main": "Are the equipment cleaning records available for the equipment used in this batch?",
+             "subs": ["Is the cleaning validation status current for the equipment type used?",
+                      "Are swab/rinse test results documented for the last cleaning cycle?"]},
+        ],
+        "traceability": [
+            {"main": "Can every raw material used in this batch be traced back to the vendor COA and incoming inspection report?",
+             "subs": ["Is the vendor COA attached to the incoming inspection record for each lot?",
+                      "Are the test results in the vendor COA cross-verified against the internal specification?",
+                      "Is the incoming inspection acceptance/rejection decision documented?"]},
+            {"main": "Is there a complete audit trail from raw material receipt to finished product release?",
+             "subs": ["Can you trace the batch from raw material receiving to in-process to final packaging?",
+                      "Are all intermediate hold/storage times documented and within validated limits?"]},
+        ],
+        "effectiveness": [
+            {"main": "Has the corrective action from the last batch deviation been implemented and verified effective?",
+             "subs": ["Is the CAPA closure report available with effectiveness verification evidence?",
+                      "Has the recurrence of the same deviation been monitored since the CAPA was closed?"]},
+            {"main": "Is there evidence that the process validation remains current and covers this product configuration?",
+             "subs": ["When was the last revalidation performed for this process?",
+                      "Have any changes been made to the process/equipment since the last validation?",
+                      "Is the validation protocol and report approved by the quality unit?"]},
+        ],
+    },
+    "hr": {
+        "record_accuracy": [
+            {"main": "Is the training effectiveness evaluation documented with specific pass/fail criteria?",
+             "subs": ["What method was used to evaluate effectiveness (quiz, observation, supervisor sign-off)?",
+                      "Is there a defined minimum passing score and was it met?",
+                      "If effectiveness was not met, was re-training initiated and documented?"]},
+            {"main": "Are competency records updated to reflect the latest SOP revisions the operator was trained on?",
+             "subs": ["Does the competency matrix reference the specific SOP version number?",
+                      "Is there evidence that the operator read and acknowledged the updated SOP?"]},
+            {"main": "Is the annual training plan aligned with the competency matrix for all roles?",
+             "subs": ["Does the training plan cover all critical process-specific training needs?",
+                      "Is there a gap analysis between planned vs. completed training for the current period?",
+                      "Are training needs identified from audit findings, CAPAs, and management review outputs?"]},
+        ],
+        "traceability": [
+            {"main": "Can you trace the operator's qualification back to the specific training session, trainer name, and assessment score?",
+             "subs": ["Is the trainer qualified and authorized to conduct the specific training?",
+                      "Is the training attendance record complete with date, duration, and signatures?"]},
+        ],
+        "effectiveness": [
+            {"main": "Has the training effectiveness review identified any recurring gaps across operators?",
+             "subs": ["Is there a trend analysis of training effectiveness scores over the last review period?",
+                      "Were any systemic training issues escalated to management review?"]},
+            {"main": "Were any training-related CAPAs raised in the last review period and are they closed?",
+             "subs": ["Is the root cause of the training gap identified (content, method, frequency)?",
+                      "Has the corrective action prevented recurrence of the same gap?"]},
+        ],
+    },
+    "purchase": {
+        "record_accuracy": [
+            {"main": "Is the supplier's current ISO/quality certificate on file and within its validity period?",
+             "subs": ["Does the certificate cover the specific scope of materials/services being purchased?",
+                      "Is there an alert or reminder system for certificate expiry tracking?"]},
+            {"main": "Is the Approved Supplier List (ASL) current and does it reflect the latest supplier audit results?",
+             "subs": ["When was the ASL last reviewed and updated?",
+                      "Are suppliers who failed the last evaluation removed or downgraded on the ASL?",
+                      "Is the ASL version-controlled and approved by the quality unit?"]},
+            {"main": "Is there a documented risk assessment for single-source critical material suppliers?",
+             "subs": ["Is there a contingency plan or alternate supplier identified for critical materials?",
+                      "Has the single-source risk been reviewed in the last management review meeting?"]},
+        ],
+        "traceability": [
+            {"main": "Can you trace the purchased material from the PO to the receiving report to the incoming inspection result?",
+             "subs": ["Is the PO number referenced on the receiving report and the inspection record?",
+                      "Are the quantity received and quantity ordered reconciled?",
+                      "Is the material storage location documented after acceptance?"]},
+        ],
+        "effectiveness": [
+            {"main": "Has the supplier performance rating been reviewed in the last scheduled evaluation period?",
+             "subs": ["What parameters were used for rating (quality, delivery, responsiveness)?",
+                      "Were underperforming suppliers issued a SCAR or placed on probation?",
+                      "Were supplier performance results presented in the management review?"]},
+        ],
+    },
+    "quality assurance": {
+        "record_accuracy": [
+            {"main": "Are CAPA records complete with root cause analysis, corrective action, and effectiveness verification?",
+             "subs": ["Is the root cause analysis method documented (5-Why, fishbone, etc.)?",
+                      "Is there a defined timeline for corrective action implementation?",
+                      "Is the effectiveness check performed after a defined period and documented?",
+                      "Are all supporting documents (evidence, photos, test data) attached to the CAPA?"]},
+            {"main": "Is the complaint investigation report completed within the defined timeline?",
+             "subs": ["Is the complaint classified by severity and regulatory reportability?",
+                      "Were containment actions implemented immediately upon complaint receipt?",
+                      "Is the investigation linked to the specific batch/lot number?"]},
+            {"main": "Is the quality objective tracking sheet updated with actual vs. target performance data?",
+             "subs": ["Are quality objectives SMART (Specific, Measurable, Achievable, Relevant, Time-bound)?",
+                      "Is there a trend chart showing objective performance over the last 4 quarters?",
+                      "Were missed targets escalated with a corrective action plan?"]},
+        ],
+        "traceability": [
+            {"main": "Can you trace a specific customer complaint back to the batch number, investigation, and corrective action?",
+             "subs": ["Is the complaint log cross-referenced with the CAPA log?",
+                      "Can the batch distribution record identify all customers who received the affected batch?"]},
+        ],
+        "effectiveness": [
+            {"main": "Has the effectiveness of CAPAs raised in the last audit cycle been verified and documented?",
+             "subs": ["How many CAPAs from the previous cycle are still open past their due date?",
+                      "Is there evidence that the root cause was eliminated (not just the symptom)?"]},
+            {"main": "Is there evidence that management review action items have been completed within the assigned timelines?",
+             "subs": ["What percentage of MRM action items are closed on time vs. overdue?",
+                      "Are overdue items escalated in subsequent MRM meetings?"]},
+        ],
+    },
+    "maintenance": {
+        "record_accuracy": [
+            {"main": "Is the calibration certificate traceable to national/international standards (NIST/ISO)?",
+             "subs": ["Does the certificate mention the name and accreditation number of the calibrating lab?",
+                      "Is the uncertainty of measurement documented on the certificate?",
+                      "Is the calibration due date clearly marked on the instrument and in the log?"]},
+            {"main": "Is the preventive maintenance schedule current and does it cover all critical equipment?",
+             "subs": ["Is there a master list of all equipment with their PM frequency?",
+                      "Are PM completion rates tracked and reported?",
+                      "Is there evidence that overdue PM was escalated and the equipment was taken out of service?"]},
+            {"main": "Are equipment qualification records (IQ/OQ/PQ) available and within their revalidation period?",
+             "subs": ["Is there a revalidation schedule defined for each qualified equipment?",
+                      "Were any changes made to the equipment that would trigger revalidation?"]},
+        ],
+        "traceability": [
+            {"main": "Can you trace the calibration of this specific instrument to the accredited lab certificate?",
+             "subs": ["Is the instrument ID on the calibration certificate matching the equipment master list?",
+                      "Is the calibration history log maintained showing all past calibration dates and results?"]},
+        ],
+        "effectiveness": [
+            {"main": "Has the preventive maintenance frequency been reviewed based on equipment failure trend data?",
+             "subs": ["Is there a failure/breakdown trend analysis for critical equipment?",
+                      "Were any PM frequency adjustments made based on the trend analysis?"]},
+        ],
+    },
+    "sales and marketing": {
+        "record_accuracy": [
+            {"main": "Is the product labeling verified against the latest approved label template and regulatory requirements?",
+             "subs": ["Is the label artwork approval record available with sign-off from QA and regulatory?",
+                      "Does the label include all mandatory regulatory information (UDI, symbols, expiry)?",
+                      "Is there a label reconciliation (issued vs. used vs. destroyed) for this batch?"]},
+            {"main": "Are customer-specific requirements (custom labeling, packaging, SKU) documented and verified before shipment?",
+             "subs": ["Is there a customer requirement specification or order specification on file?",
+                      "Is there a final inspection/verification step before dispatch for customer-specific orders?"]},
+        ],
+        "traceability": [
+            {"main": "Can you trace a specific customer order from PO receipt to dispatch, including all quality checks?",
+             "subs": ["Is the dispatch record linked to the specific batch/lot number and inspection report?",
+                      "Is the shipping documentation (packing list, invoice, COA) complete and accurate?"]},
+        ],
+        "effectiveness": [
+            {"main": "Has customer satisfaction data been reviewed and acted upon in the last evaluation period?",
+             "subs": ["What methods are used to collect customer feedback (surveys, complaints, returns)?",
+                      "Were any trends identified and escalated to management review?"]},
+        ],
+    },
+    "management review": {
+        "record_accuracy": [
+            {"main": "Are all required MRM inputs (audits, complaints, CAPAs, process performance) documented in the minutes?",
+             "subs": ["Is there a standardized agenda template that covers all ISO 13485 required inputs?",
+                      "Are data/charts/trends presented for each input or just verbal summaries?",
+                      "Are external audit findings and regulatory changes included as inputs?"]},
+            {"main": "Are MRM action items assigned with specific owners, timelines, and completion criteria?",
+             "subs": ["Is there a tracker showing open vs. closed action items from all previous MRMs?",
+                      "Are overdue actions highlighted and re-assigned with revised timelines?"]},
+        ],
+        "traceability": [
+            {"main": "Can each MRM action item be traced to its completion evidence and effectiveness verification?",
+             "subs": ["Is the completion evidence attached or referenced in the action tracker?",
+                      "Is effectiveness of actions reviewed in the subsequent MRM?"]},
+        ],
+        "effectiveness": [
+            {"main": "Were the quality objectives set in the previous MRM achieved? If not, what corrective action was taken?",
+             "subs": ["Is there a comparison of current period results vs. the objectives set in the last MRM?",
+                      "Were resource allocation decisions from the last MRM implemented?"]},
+        ],
+    },
+}
+
+# ── Generic fallback templates (main + subs) ─────────────────────────────────
+_GENERIC_FOLLOWUP_TEMPLATES = {
+    "record_accuracy": [
+        {"main": "Are all records legible, dated, and signed by authorized personnel?",
+         "subs": ["Is there a master list of authorized signatories for each record type?",
+                  "Are electronic records protected with audit trail and access controls?"]},
+        {"main": "Is the document version control maintained and current?",
+         "subs": ["Is there a document master list showing current revision status?",
+                  "Are obsolete documents removed from the point of use?"]},
+    ],
+    "traceability": [
+        {"main": "Can the complete audit trail be reconstructed from the available records?",
+         "subs": ["Are unique identifiers used consistently across all related records?",
+                  "Is there bidirectional traceability between inputs and outputs?"]},
+    ],
+    "effectiveness": [
+        {"main": "Is there evidence that the corrective actions from the previous audit cycle were effective?",
+         "subs": ["How many repeat findings were identified in the current audit vs. the previous?",
+                  "Is there a trend analysis of audit findings by category?"]},
+        {"main": "Is there evidence that preventive actions are reducing recurrence of similar issues?",
+         "subs": ["Has the frequency of similar non-conformances decreased after preventive action?",
+                  "Is preventive action effectiveness reviewed periodically?"]},
+    ],
+}
+
+
+def get_all_completed_answers(
+    audit_id: str,
+    dept: str,
+    *,
+    tenant_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Return every answered checklist row across ALL sections for the given audit + dept."""
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    dept_n = _normalize_text(dept)
+    sections = get_sections_for_department(dept_n, tenant_id=tenant_id)
+    completed: List[Dict[str, Any]] = []
+    for section in sections:
+        rows = get_checklist_rows_for_audit_section(audit_id, dept_n, section, tenant_id=tenant_id)
+        for r in rows:
+            obs = str(r.get("observation", "") or "").strip()
+            ev = str(r.get("evidence", "") or "").strip()
+            if obs and ev:
+                completed.append({
+                    "section": section, "sr_no": r.get("sr_no", ""),
+                    "checklist": r.get("checklist", ""), "observation": obs,
+                    "evidence": ev, "clause_no": r.get("clause_no", ""),
+                    "item_level": r.get("item_level", "main"),
+                })
+    return completed
+
+
+def get_all_pending_questions(
+    audit_id: str,
+    dept: str,
+    *,
+    tenant_id: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Return every unanswered checklist row across ALL sections."""
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    dept_n = _normalize_text(dept)
+    sections = get_sections_for_department(dept_n, tenant_id=tenant_id)
+    pending: List[Dict[str, Any]] = []
+    for section in sections:
+        rows = get_checklist_rows_for_audit_section(audit_id, dept_n, section, tenant_id=tenant_id)
+        for r in rows:
+            obs = str(r.get("observation", "") or "").strip()
+            ev = str(r.get("evidence", "") or "").strip()
+            if not obs or not ev:
+                pending.append({
+                    "section": section, "sr_no": r.get("sr_no", ""),
+                    "checklist": r.get("checklist", ""),
+                    "item_level": r.get("item_level", "main"),
+                })
+    return pending
+
+
+def extract_text_from_audit_reports(
+    audit_id: str,
+    *,
+    tenant_id: Optional[str] = None,
+    max_chars: int = 8000,
+) -> str:
+    """Read all uploaded report files for an audit and return combined text."""
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    a = get_audit(audit_id, tenant_id=tenant_id)
+    if not a:
+        return ""
+    reports = a.get("reports", []) or []
+    combined_text = []
+    for rpt in reports:
+        saved_path = rpt.get("saved_path", "")
+        file_name = rpt.get("file_name", "")
+        if not saved_path or not os.path.exists(saved_path):
+            continue
+        try:
+            ext = os.path.splitext(file_name)[1].lower()
+            if ext == ".pdf":
+                try:
+                    import fitz
+                    doc = fitz.open(saved_path)
+                    for page in doc:
+                        combined_text.append(page.get_text())
+                    doc.close()
+                except ImportError:
+                    combined_text.append(f"[PDF report uploaded: {file_name}]")
+            elif ext in (".csv", ".txt"):
+                with open(saved_path, "r", encoding="utf-8", errors="ignore") as f:
+                    combined_text.append(f.read())
+            elif ext in (".xlsx", ".xls"):
+                combined_text.append(f"[Excel report uploaded: {file_name}]")
+        except Exception:
+            combined_text.append(f"[File: {file_name} — could not extract text]")
+    full_text = "\n\n".join(combined_text)
+    return full_text[:max_chars] if len(full_text) > max_chars else full_text
+
+
+def _analyze_answer_weakness(observation: str, evidence: str) -> List[str]:
+    """Detect weakness type(s) in an answer. Returns list of tags."""
+    tags = []
+    combined = (observation + " " + evidence).lower()
+    for kw in _WEAKNESS_KEYWORDS:
+        if kw in combined:
+            tags.append("gap_detected")
+            break
+    word_count = len(combined.split())
+    if word_count < 8:
+        tags.append("vague_answer")
+    obs_lower = observation.lower().strip()
+    if obs_lower in _VAGUE_KEYWORDS or (len(obs_lower) < 20 and any(obs_lower.startswith(v) for v in _VAGUE_KEYWORDS)):
+        tags.append("vague_answer")
+    if not evidence.strip() or evidence.strip().lower() in ("na", "n/a", "nil", "none", "-"):
+        tags.append("weak_evidence")
+    return tags if tags else ["solid"]
+
+
+def build_ai_question_context(
+    audit_id: str,
+    dept: str,
+    current_section: str,
+    *,
+    tenant_id: Optional[str] = None,
+    last_n_answers: int = 10,
+) -> Dict[str, Any]:
+    """Build structured context dict by scanning answers and files."""
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    dept_n = _normalize_text(dept)
+    section_n = _normalize_text(current_section)
+    completed = get_all_completed_answers(audit_id, dept_n, tenant_id=tenant_id)
+    pending = get_all_pending_questions(audit_id, dept_n, tenant_id=tenant_id)
+    file_text = extract_text_from_audit_reports(audit_id, tenant_id=tenant_id, max_chars=6000)
+    recent_answers = completed[-last_n_answers:]
+    last_answer = completed[-1] if completed else None
+
+    # Analyze weaknesses in recent answers
+    weak_answers = []
+    for ans in recent_answers:
+        tags = _analyze_answer_weakness(ans.get("observation", ""), ans.get("evidence", ""))
+        if "solid" not in tags:
+            weak_answers.append({**ans, "weakness_tags": tags})
+
+    current_section_rows = get_checklist_rows_for_audit_section(
+        audit_id, dept_n, section_n, tenant_id=tenant_id)
+
+    return {
+        "department": dept_n,
+        "current_section": section_n,
+        "total_completed": len(completed),
+        "total_pending": len(pending),
+        "last_answer": last_answer,
+        "recent_answers": recent_answers,
+        "weak_answers": weak_answers,
+        "pending_questions": pending[:20],
+        "current_section_questions": [r.get("checklist", "") for r in current_section_rows],
+        "file_evidence_text": file_text,
+        "existing_question_texts": [r.get("checklist", "") for r in current_section_rows],
+    }
+
+
+def _pick_followup_question(context: Dict[str, Any]) -> Tuple[str, List[str], str]:
+    """
+    Rule-based engine: pick the best follow-up question based on answer analysis.
+    Returns (main_question, sub_questions_list, reasoning).
+    """
+    dept = context.get("department", "").lower().strip()
+    weak_answers = context.get("weak_answers", [])
+    existing_qs = {q.lower().strip() for q in context.get("existing_question_texts", []) if q}
+    last_answer = context.get("last_answer") or {}
+
+    def _is_duplicate(q: str) -> bool:
+        return q.lower().strip() in existing_qs
+
+    # ── Strategy 1: If weak answers found, probe the weakness ─────────────
+    if weak_answers:
+        wa = weak_answers[-1]  # most recent weak answer
+        tags = wa.get("weakness_tags", [])
+        original_q = wa.get("checklist", "")
+
+        if "gap_detected" in tags:
+            gap_sets = [
+                {"main": f"Regarding '{original_q[:80]}...' — what corrective action has been initiated to address the identified gap?",
+                 "subs": [f"Is there a documented root cause analysis for the gap found in: '{original_q[:60]}...'?",
+                          "Has a CAPA been raised with a defined timeline for closure?",
+                          "What interim containment action was taken to prevent product/process impact?"]},
+                {"main": f"For the gap found in '{original_q[:80]}...' — is there a documented investigation?",
+                 "subs": ["Was the investigation completed within the defined SOP timeline?",
+                          "Is the investigation report approved by the quality unit?",
+                          "Were affected products/batches identified and dispositioned?"]},
+            ]
+            for gs in gap_sets:
+                if not _is_duplicate(gs["main"]):
+                    return gs["main"], gs["subs"], "Gap/non-conformance detected in previous answer. Probing corrective action and investigation depth."
+
+        if "vague_answer" in tags:
+            vague_sets = [
+                {"main": f"Can you provide specific documentary evidence (document number, date, version) for: '{original_q[:80]}...'?",
+                 "subs": ["What specific document/record was reviewed to support this observation?",
+                          "What was the document revision number and date?",
+                          "Were the findings compared against the acceptance criteria defined in the SOP?"]},
+                {"main": f"The observation for '{original_q[:80]}...' needs more detail — what specific records were reviewed?",
+                 "subs": ["List the specific record identifiers (log numbers, batch numbers) that were checked.",
+                          "What was the actual finding vs. the expected requirement?"]},
+            ]
+            for vs in vague_sets:
+                if not _is_duplicate(vs["main"]):
+                    return vs["main"], vs["subs"], "Previous answer was too vague. Requesting specific documentary evidence with sub-questions."
+
+        if "weak_evidence" in tags:
+            ev_sets = [
+                {"main": f"What specific document, record, or reference supports the observation for: '{original_q[:80]}...'?",
+                 "subs": ["Can you show/attach the actual evidence document (log, certificate, report)?",
+                          "Is the evidence document signed and dated by the authorized person?"]},
+            ]
+            for es in ev_sets:
+                if not _is_duplicate(es["main"]):
+                    return es["main"], es["subs"], "Evidence field was empty or marked N/A. Requesting concrete evidence with verification sub-questions."
+
+    # ── Strategy 2: Department-specific probing questions (main + subs) ────
+    dept_key = None
+    for k in _DEPT_FOLLOWUP_TEMPLATES:
+        if k in dept:
+            dept_key = k
+            break
+    templates = _DEPT_FOLLOWUP_TEMPLATES.get(dept_key, _GENERIC_FOLLOWUP_TEMPLATES)
+
+    completed_count = context.get("total_completed", 0)
+    if completed_count < 3:
+        category = "record_accuracy"
+        reason_prefix = "Early in audit — verifying record accuracy and completeness with detailed sub-questions."
+    elif weak_answers:
+        category = "effectiveness"
+        reason_prefix = "Weaknesses detected — testing implementation effectiveness with follow-up sub-questions."
+    else:
+        categories = ["record_accuracy", "traceability", "effectiveness"]
+        category = _random.choice(categories)
+        reason_prefix = f"Answers appear solid — probing deeper into {category.replace('_', ' ')} with sub-questions."
+
+    pool = templates.get(category, [])
+    if not pool:
+        pool = _GENERIC_FOLLOWUP_TEMPLATES.get(category, [])
+
+    _random.shuffle(pool)
+    for item in pool:
+        main_q = item.get("main", "") if isinstance(item, dict) else str(item)
+        subs = item.get("subs", []) if isinstance(item, dict) else []
+        if not _is_duplicate(main_q):
+            return main_q, subs, reason_prefix
+
+    # ── Strategy 3: Last resort ──────────────────────────────────────────
+    if last_answer:
+        la_q = last_answer.get("checklist", "")
+        fallback_main = f"Can you cross-reference the records reviewed for '{la_q[:80]}...' with the corresponding entries in the master log/register?"
+        fallback_subs = ["Is the master log/register current and version-controlled?",
+                         "Are any discrepancies between the reviewed records and the master log documented?"]
+        if not _is_duplicate(fallback_main):
+            return fallback_main, fallback_subs, "All template questions exhausted — generating cross-reference verification."
+
+    return ("Are all records reviewed in this section legible, dated, signed, and retrievable as per the document control procedure?",
+            ["Is there a defined retention period for each record type?", "Are backup copies maintained for critical records?"],
+            "Fallback — verifying fundamental record-keeping compliance.")
+
+
+def add_ai_question_with_subs(
+    audit_id: str,
+    dept: str,
+    section: str,
+    main_text: str,
+    sub_texts: List[str],
+    auditor_name: str,
+    *,
+    tenant_id: Optional[str] = None,
+) -> Tuple[bool, str]:
+    """
+    Add an AI-generated main question + its sub-questions to the checklist
+    with proper hierarchy (item_level=main/sub, parent_order linkage).
+    """
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    dept_n, section_n = _normalize_text(dept), _normalize_text(section)
+    if not main_text.strip():
+        return False, "Main question text is required."
+
+    existing = load_audit_section_table(audit_id, dept_n, section_n, tenant_id=tenant_id) or []
+    rows = list(existing) if existing else [
+        {"sr_no": str(i), "checklist": str(item).strip(),
+         "observation": "", "evidence": "",
+         "item_level": "main", "parent_order": None}
+        for i, item in enumerate(
+            get_items_for_department_section(dept_n, section_n, tenant_id=tenant_id), start=1)
+    ]
+
+    # Assign sr_no for the new main question
+    max_sr = max((int(float(str(r.get("sr_no", "0")).strip() or "0")) for r in rows), default=0)
+    main_sr = max_sr + 1
+
+    # Add main question
+    rows.append({
+        "sr_no": str(main_sr),
+        "checklist": f"[AI] {main_text.strip()}",
+        "observation": "",
+        "evidence": "",
+        "clause_no": "",
+        "item_level": "main",
+        "parent_order": None,
+    })
+
+    # Add sub-questions linked to the main
+    for sub_text in (sub_texts or []):
+        sub_text = sub_text.strip()
+        if not sub_text:
+            continue
+        max_sr += 1
+        rows.append({
+            "sr_no": str(max_sr + 1),
+            "checklist": f"[AI] {sub_text}",
+            "observation": "",
+            "evidence": "",
+            "clause_no": "",
+            "item_level": "sub",
+            "parent_order": main_sr,
+        })
+
+    return save_audit_section_table(
+        audit_id=audit_id, dept=dept_n, section=section_n,
+        rows=rows, auditor_name=auditor_name, tenant_id=tenant_id)
+
+
+def generate_and_add_ai_question(
+    audit_id: str,
+    dept: str,
+    section: str,
+    auditor_name: str,
+    *,
+    tenant_id: Optional[str] = None,
+    api_key: Optional[str] = None,
+    auto_add: bool = False,
+) -> Tuple[bool, str, str, List[str]]:
+    """
+    Full pipeline: build context → analyze answers → generate main + sub questions.
+    100% FREE — no API key needed.
+    Returns: (success, main_question, reasoning, sub_questions_list)
+    """
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    context = build_ai_question_context(audit_id, dept, section, tenant_id=tenant_id)
+    question, subs, reasoning = _pick_followup_question(context)
+
+    if not question:
+        return False, "", "Could not generate a question.", []
+
+    if auto_add:
+        add_ok, add_msg = add_ai_question_with_subs(
+            audit_id=audit_id, dept=dept, section=section,
+            main_text=question, sub_texts=subs,
+            auditor_name=auditor_name, tenant_id=tenant_id,
+        )
+        if not add_ok:
+            return True, question, f"Generated but failed to add: {add_msg}", subs
+    return True, question, reasoning, subs
+
+
+def generate_ai_questions_for_department(
+    audit_id: str,
+    dept: str,
+    auditor_name: str,
+    *,
+    tenant_id: Optional[str] = None,
+    api_key: Optional[str] = None,
+    max_per_section: int = 1,
+) -> List[Dict[str, Any]]:
+    """Generate smart follow-up questions (main + subs) for every section. FREE."""
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    dept_n = _normalize_text(dept)
+    sections = get_sections_for_department(dept_n, tenant_id=tenant_id)
+    results = []
+    for section in sections:
+        for _ in range(max_per_section):
+            ok, q, reason, subs = generate_and_add_ai_question(
+                audit_id, dept_n, section, auditor_name,
+                tenant_id=tenant_id, auto_add=True,
+            )
+            results.append({
+                "section": section, "question": q if ok else "",
+                "sub_questions": subs if ok else [],
+                "reasoning": reason, "added": ok,
+            })
+    return results

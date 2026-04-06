@@ -458,6 +458,56 @@ def inject_enterprise_css():
     span[data-baseweb="tag"] svg{
         fill:#10b981 !important;
     }
+
+    /* ── AI Question Generator ── */
+    .ai-gen-card {
+        background: linear-gradient(135deg, #1e1b4b 0%, #312e81 50%, #3730a3 100%);
+        border-radius: 14px; padding: 20px 24px; margin: 16px 0;
+        border: 1px solid rgba(129, 140, 248, 0.3);
+        box-shadow: 0 4px 20px rgba(49, 46, 129, 0.25);
+        position: relative; overflow: hidden;
+    }
+    .ai-gen-card::before {
+        content: ''; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+        background: linear-gradient(90deg, #818cf8, #a78bfa, #c084fc);
+    }
+    .ai-gen-title {
+        font-family: 'Cormorant Garamond', serif; font-size: 18px;
+        font-weight: 700; color: #e0e7ff; margin-bottom: 4px;
+    }
+    .ai-gen-sub { font-size: 12px; color: #a5b4fc; margin-bottom: 12px; }
+    .ai-q-result {
+        background: rgba(255,255,255,0.08); border: 1px solid rgba(129, 140, 248, 0.25);
+        border-radius: 10px; padding: 14px 16px; margin-top: 12px;
+    }
+    .ai-q-text { font-size: 14px; font-weight: 700; color: #e0e7ff; line-height: 1.6; }
+    .ai-q-reasoning {
+        font-size: 12px; color: #a5b4fc; margin-top: 8px;
+        padding-top: 8px; border-top: 1px solid rgba(129, 140, 248, 0.15);
+    }
+    .ai-q-badge {
+        display: inline-flex; align-items: center; gap: 6px;
+        background: rgba(167, 139, 250, 0.2); border: 1px solid rgba(167, 139, 250, 0.4);
+        border-radius: 999px; padding: 3px 12px;
+        font-size: 11px; font-weight: 700; color: #c4b5fd;
+    }
+    .ai-context-card {
+        background: #ffffff; border: 1px solid #e2e8f0; border-left: 4px solid #818cf8;
+        border-radius: 10px; padding: 14px 16px; margin: 8px 0;
+    }
+    .ai-context-label {
+        font-size: 11px; font-weight: 800; color: #6366f1;
+        letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 4px;
+    }
+    .ai-context-value { font-size: 13px; color: #334155; line-height: 1.5; }
+    .ai-scan-pill {
+        display: inline-flex; align-items: center; gap: 6px;
+        padding: 6px 14px; border-radius: 999px;
+        font-size: 12px; font-weight: 700; margin-right: 6px; margin-bottom: 6px;
+    }
+    .ai-scan-pill.done { background: #ecfdf5; border: 1px solid #a7f3d0; color: #065f46; }
+    .ai-scan-pill.pending { background: #fefce8; border: 1px solid #fde68a; color: #92400e; }
+    .ai-scan-pill.file { background: #eff6ff; border: 1px solid #bfdbfe; color: #1e3a8a; }
     </style>""", unsafe_allow_html=True)
 
 def inject_theme_overrides():
@@ -2482,6 +2532,178 @@ def page_admin_checklist():
         with cC:
             st.info("Tip: Add main questions first (item order auto-assigned 1,2,3…). Then add sub-questions with Level=sub and Parent Q# pointing to the main question's row number.")
 
+# ── AI Question Generator UI ─────────────────────────────────────────────────
+def render_ai_question_generator(audit_id, dept, section, person_name, can_edit):
+    """Renders the AI-powered question generator inside auditor checklist."""
+
+    st.markdown("---")
+    st.markdown(
+        '<div class="ai-gen-card">'
+        '<div class="ai-gen-title">🤖 AI Question Generator</div>'
+        '<div class="ai-gen-sub">'
+        'Scans your completed answers, uploaded evidence files, and checklist history '
+        'to generate the next most relevant audit question for this section.'
+        '</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
+
+    with st.expander("🧠 Generate AI Follow-up Question", expanded=False):
+        st.caption(
+            "The AI will analyze all your previous answers in this audit, "
+            "scan any uploaded report files, and generate a targeted follow-up "
+            "question based on gaps or areas needing deeper investigation."
+        )
+
+        # Show context summary
+        try:
+            context = _engine_call(
+                "build_ai_question_context",
+                audit_id, dept, section,
+                tenant_id=st.session_state.auth.get("tenant_id"),
+            )
+
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.markdown(
+                    f'<div class="ai-scan-pill done">'
+                    f'✅ {context["total_completed"]} answers scanned</div>',
+                    unsafe_allow_html=True)
+            with c2:
+                st.markdown(
+                    f'<div class="ai-scan-pill pending">'
+                    f'⏳ {context["total_pending"]} questions pending</div>',
+                    unsafe_allow_html=True)
+            with c3:
+                file_status = "📄 Files scanned" if context.get("file_evidence_text") else "📄 No files"
+                pill_cls = "file" if context.get("file_evidence_text") else "pending"
+                st.markdown(
+                    f'<div class="ai-scan-pill {pill_cls}">{file_status}</div>',
+                    unsafe_allow_html=True)
+
+            if context.get("last_answer"):
+                la = context["last_answer"]
+                obs_preview = str(la.get("observation", ""))[:150]
+                st.markdown(
+                    f'<div class="ai-context-card">'
+                    f'<div class="ai-context-label">Last Answered Question</div>'
+                    f'<div class="ai-context-value"><b>{la.get("checklist","")}</b></div>'
+                    f'<div class="ai-context-value" style="margin-top:4px;color:#64748b;">'
+                    f'Observation: {obs_preview}...</div>'
+                    f'</div>',
+                    unsafe_allow_html=True)
+        except Exception as e:
+            st.warning(f"Could not load context: {e}")
+            context = None
+
+        st.write("")
+
+        col_gen, col_mode = st.columns([2, 1])
+        with col_mode:
+            auto_add = st.checkbox(
+                "Auto-add to checklist", value=False,
+                key=f"ai_auto_add_{audit_id}_{section}",
+                help="If checked, the generated question will be automatically added to this section's checklist.")
+        with col_gen:
+            generate_btn = st.button(
+                "🤖 Generate Question",
+                key=f"ai_gen_btn_{audit_id}_{section}",
+                type="primary", disabled=not can_edit, use_container_width=True)
+
+        gen_key = f"ai_generated::{audit_id}::{section}"
+        reason_key = f"ai_reasoning::{audit_id}::{section}"
+        subs_key = f"ai_subs::{audit_id}::{section}"
+
+        if generate_btn:
+            with st.spinner("🔍 Scanning answers and files... Generating question..."):
+                try:
+                    result = _engine_call(
+                        "generate_and_add_ai_question",
+                        audit_id=audit_id, dept=dept, section=section,
+                        auditor_name=person_name,
+                        tenant_id=st.session_state.auth.get("tenant_id"),
+                        auto_add=auto_add)
+                    # result is (ok, question, reasoning, subs)
+                    ok = result[0]
+                    question = result[1]
+                    reasoning = result[2]
+                    subs = result[3] if len(result) > 3 else []
+                    if ok:
+                        st.session_state[gen_key] = question
+                        st.session_state[reason_key] = reasoning
+                        st.session_state[subs_key] = subs
+                        if auto_add:
+                            st.success(f"✅ Question generated with {len(subs)} sub-question(s) and added to checklist!")
+                            st.rerun()
+                        else:
+                            st.success(f"✅ Question generated with {len(subs)} sub-question(s)!")
+                    else:
+                        st.error(f"Generation failed: {reasoning}")
+                except Exception as e:
+                    st.error(f"Error: {str(e)}")
+
+        if gen_key in st.session_state and st.session_state[gen_key]:
+            q_text = st.session_state[gen_key]
+            r_text = st.session_state.get(reason_key, "")
+            sub_list = st.session_state.get(subs_key, [])
+
+            # Build sub-questions HTML
+            subs_html = ""
+            if sub_list:
+                subs_items = "".join(
+                    f'<div style="display:flex;align-items:flex-start;gap:8px;margin:6px 0 6px 20px;">'
+                    f'<span style="min-width:22px;height:22px;border-radius:50%;background:rgba(167,139,250,0.25);'
+                    f'color:#c4b5fd;font-size:10px;font-weight:800;display:flex;align-items:center;'
+                    f'justify-content:center;flex-shrink:0;">{chr(65+i)}</span>'
+                    f'<span style="font-size:13px;color:#c7d2fe;line-height:1.5;">{s}</span>'
+                    f'</div>'
+                    for i, s in enumerate(sub_list)
+                )
+                subs_html = (
+                    f'<div style="margin-top:10px;padding-top:8px;border-top:1px solid rgba(129,140,248,0.15);">'
+                    f'<div style="font-size:11px;font-weight:700;color:#a5b4fc;letter-spacing:0.5px;'
+                    f'text-transform:uppercase;margin-bottom:6px;">Sub-questions ({len(sub_list)})</div>'
+                    f'{subs_items}'
+                    f'</div>'
+                )
+
+            st.markdown(
+                f'<div class="ai-q-result">'
+                f'<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">'
+                f'<div class="ai-q-badge">🤖 AI Generated</div>'
+                f'<div class="ai-q-badge" style="background:rgba(52,211,153,0.2);border-color:rgba(52,211,153,0.4);'
+                f'color:#6ee7b7;">Main + {len(sub_list)} Sub(s)</div>'
+                f'</div>'
+                f'<div class="ai-q-text">{q_text}</div>'
+                f'{subs_html}'
+                f'<div class="ai-q-reasoning"><b>Reasoning:</b> {r_text}</div>'
+                f'</div>',
+                unsafe_allow_html=True)
+
+            if not auto_add:
+                if st.button("➕ Add Main + Sub-Questions to Checklist",
+                             key=f"ai_add_btn_{audit_id}_{section}", type="primary"):
+                    add_ok, add_msg = _engine_call(
+                        "add_ai_question_with_subs",
+                        audit_id=audit_id, dept=dept, section=section,
+                        main_text=q_text, sub_texts=sub_list,
+                        auditor_name=person_name,
+                        tenant_id=st.session_state.auth.get("tenant_id"))
+                    if add_ok:
+                        st.success(f"Added main question + {len(sub_list)} sub-question(s) to checklist!")
+                        st.session_state.pop(gen_key, None)
+                        st.session_state.pop(reason_key, None)
+                        st.session_state.pop(subs_key, None)
+                        st.rerun()
+                    else:
+                        st.error(add_msg)
+
+            if st.button("🔄 Generate Another", key=f"ai_regen_{audit_id}_{section}"):
+                st.session_state.pop(gen_key, None)
+                st.session_state.pop(reason_key, None)
+                st.session_state.pop(subs_key, None)
+                st.rerun()
+
 def _render_node_text(text: str) -> str:
     """If text has a colon followed by semicolon-separated items, render as bullet list."""
     if ":" in text:
@@ -2615,10 +2837,191 @@ def page_auditor_checklist():
     if not can_edit:
         st.warning("⚠️ Read-only — audit must be In Progress and assigned to you.")
 
-    # ── Step 1: Section picker ────────────────────────────────────────────────
-    sections = _cached_sections_for_dept(_current_tenant_id(), dept)
+    # ══════════════════════════════════════════════════════════════════════════
+    # DEPARTMENT CHECKLIST GENERATOR
+    # Production uses the 4-question pre-audit wizard.
+    # Purchase and HR use direct clause-focused generators.
+    # ══════════════════════════════════════════════════════════════════════════
+    pre_audit_answers = _engine_call("get_pre_audit_answers", audit_id)
+    generator_cfg = _engine_call("get_department_generator_config", dept)
+
+    if not pre_audit_answers:
+        mode = str(generator_cfg.get("mode", "none") or "none").strip().lower()
+        title = str(generator_cfg.get("title", "Checklist Generator"))
+        desc = str(generator_cfg.get("description", ""))
+        button_label = str(generator_cfg.get("button_label", "Generate Checklist"))
+        focus_lines = generator_cfg.get("focus_lines", []) or []
+
+        st.markdown("---")
+        st.markdown(
+            '<div style="background:linear-gradient(135deg,#1e1b4b,#312e81);border-radius:14px;'
+            'padding:20px 24px;margin:16px 0;border:1px solid rgba(129,140,248,0.3);'
+            'box-shadow:0 4px 20px rgba(49,46,129,0.25);position:relative;overflow:hidden;">'
+            '<div style="position:absolute;top:0;left:0;right:0;height:3px;'
+            'background:linear-gradient(90deg,#818cf8,#a78bfa,#c084fc);"></div>'
+            f'<div style="font-family:\'Cormorant Garamond\',serif;font-size:20px;'
+            f'font-weight:700;color:#e0e7ff;margin-bottom:4px;">📋 {title}</div>'
+            f'<div style="font-size:12px;color:#a5b4fc;margin-bottom:12px;">{desc}</div>'
+            '</div>',
+            unsafe_allow_html=True
+        )
+
+        if mode == "pre_audit":
+            pre_audit_qs = engine.get_pre_audit_questions()
+            wizard_answers = {}
+
+            for i, pq in enumerate(pre_audit_qs):
+                st.markdown(
+                    f'<div style="background:#fff;border:1px solid #e2e8f0;border-left:4px solid #6366f1;'
+                    f'border-radius:10px;padding:14px 16px;margin:8px 0;">'
+                    f'<div style="font-size:11px;font-weight:800;color:#6366f1;letter-spacing:0.5px;'
+                    f'text-transform:uppercase;margin-bottom:4px;">Question {i+1} of 4 &nbsp;·&nbsp; '
+                    f'Ref: Clause {pq["clause_ref"]}</div>'
+                    f'<div style="font-size:14px;font-weight:700;color:#1e293b;line-height:1.5;">'
+                    f'{pq["text"]}</div>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
+                answer = st.radio(
+                    f"Q{i+1}",
+                    options=["Yes", "No"],
+                    index=1,
+                    key=f"pa_q_{audit_id}_{pq['id']}",
+                    horizontal=True,
+                    label_visibility="collapsed",
+                )
+                wizard_answers[pq["id"]] = (answer == "Yes")
+
+            st.write("")
+            if st.button(button_label, type="primary", use_container_width=True,
+                         key=f"pa_generate_{audit_id}", disabled=not can_edit):
+                ok, msg = _engine_call("save_pre_audit_answers", audit_id, wizard_answers)
+                if ok:
+                    st.success(f"✅ {msg}")
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.error(msg)
+
+            preview = engine.generate_department_checklist(dept, wizard_answers)
+        elif mode == "direct":
+            for line in focus_lines:
+                st.markdown(
+                    f'<div style="background:#fff;border:1px solid #e2e8f0;border-left:4px solid #6366f1;'
+                    f'border-radius:10px;padding:12px 16px;margin:8px 0;font-size:13px;color:#334155;">{line}</div>',
+                    unsafe_allow_html=True,
+                )
+
+            st.write("")
+            if st.button(button_label, type="primary", use_container_width=True,
+                         key=f"dept_generate_{audit_id}", disabled=not can_edit):
+                ok, msg = _engine_call("save_generated_department_checklist", audit_id, {})
+                if ok:
+                    st.success(f"✅ {msg}")
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.error(msg)
+
+            preview = engine.generate_department_checklist(dept, {})
+        else:
+            st.info("No dynamic checklist generator is configured for this department.")
+            preview = []
+
+        main_count = sum(1 for p in preview if p["item_level"] == "main")
+        sub_count = sum(1 for p in preview if p["item_level"] == "sub")
+        sections_preview = sorted(set(p["section"] for p in preview))
+
+        st.markdown(
+            f'<div style="background:#f0fdf9;border:1px solid #a7f3d0;border-radius:10px;'
+            f'padding:14px 16px;margin-top:16px;">'
+            f'<div style="font-size:13px;font-weight:700;color:#065f46;">Preview: This will generate</div>'
+            f'<div style="font-size:12px;color:#334155;margin-top:4px;">'
+            f'<b>{main_count}</b> main questions + <b>{sub_count}</b> sub-questions '
+            f'across <b>{len(sections_preview)}</b> sections'
+            f'{": " + ", ".join(sections_preview) if sections_preview else ""}</div>'
+            f'</div>',
+            unsafe_allow_html=True)
+
+        st.stop()
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # CHECKLIST GENERATOR SUMMARY
+    # ══════════════════════════════════════════════════════════════════════════
+    dep_key = str(dept or "").strip().lower()
+    if dep_key == "production":
+        pa_labels = {
+            "is_implantable": "Implantable Device",
+            "is_sterile": "Sterile Device",
+            "requires_installation": "Requires Installation",
+            "requires_servicing": "Requires Servicing",
+        }
+        pills_html = ""
+        for pa_id, pa_label in pa_labels.items():
+            val = pre_audit_answers.get(pa_id, False)
+            if val:
+                pills_html += (
+                    f'<span style="display:inline-flex;align-items:center;gap:5px;padding:4px 12px;'
+                    f'border-radius:999px;background:#ecfdf5;border:1px solid #a7f3d0;'
+                    f'color:#065f46;font-size:11px;font-weight:700;margin-right:6px;">✓ {pa_label}</span>'
+                )
+            else:
+                pills_html += (
+                    f'<span style="display:inline-flex;align-items:center;gap:5px;padding:4px 12px;'
+                    f'border-radius:999px;background:#f8fafc;border:1px solid #e2e8f0;'
+                    f'color:#94a3b8;font-size:11px;font-weight:700;margin-right:6px;">✗ {pa_label}</span>'
+                )
+
+        st.markdown(
+            f'<div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;'
+            f'padding:12px 16px;margin-bottom:16px;">'
+            f'<div style="font-size:11px;font-weight:800;color:#6366f1;letter-spacing:0.5px;'
+            f'text-transform:uppercase;margin-bottom:6px;">Product Classification</div>'
+            f'{pills_html}'
+            f'</div>',
+            unsafe_allow_html=True)
+
+        if can_edit:
+            with st.expander("🔄 Reset Pre-Audit Classification", expanded=False):
+                st.caption("This will delete all checklist answers and regenerate questions based on new classification.")
+                if st.button("Reset Classification", key=f"pa_reset_{audit_id}", type="secondary"):
+                    audit_obj = _engine_call("get_audit", audit_id)
+                    if audit_obj:
+                        audit_obj.pop("pre_audit_answers", None)
+                        audit_obj["checklists"] = {}
+                        _engine_call("save_updated_audit", audit_obj)
+                        st.cache_data.clear()
+                        st.rerun()
+    elif dep_key in {"purchase", "hr"}:
+        st.markdown(
+            f'<div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;'
+            f'padding:12px 16px;margin-bottom:16px;">'
+            f'<div style="font-size:11px;font-weight:800;color:#6366f1;letter-spacing:0.5px;'
+            f'text-transform:uppercase;margin-bottom:6px;">Checklist Generator Status</div>'
+            f'<span style="display:inline-flex;align-items:center;gap:5px;padding:4px 12px;'
+            f'border-radius:999px;background:#ecfdf5;border:1px solid #a7f3d0;'
+            f'color:#065f46;font-size:11px;font-weight:700;margin-right:6px;">✓ Generated for {dept}</span>'
+            f'</div>',
+            unsafe_allow_html=True)
+
+        if can_edit:
+            with st.expander("🔄 Reset Generated Checklist", expanded=False):
+                st.caption("This will delete the generated checklist so you can generate it again.")
+                if st.button("Reset Checklist", key=f"dept_reset_{audit_id}", type="secondary"):
+                    audit_obj = _engine_call("get_audit", audit_id)
+                    if audit_obj:
+                        audit_obj.pop("pre_audit_answers", None)
+                        audit_obj["checklists"] = {}
+                        _engine_call("save_updated_audit", audit_obj)
+                        st.cache_data.clear()
+                        st.rerun()
+
+    # ── Step 1: Section picker (from generated checklist) ─────────────────────
+    sections = _engine_call("get_generated_sections", audit_id, dept)
     if not sections:
-        st.info("No checklist sections found for this department."); return
+        st.info("No checklist sections generated. Please complete the pre-audit classification first.")
+        return
 
     # use session state so section persists across reruns
     sec_key = f"ck_sec::{audit_id}"
@@ -2779,6 +3182,9 @@ def page_auditor_checklist():
                         st.rerun()
                     else:
                         st.error(msg or "Failed to add question.")
+
+        # ── AI Question Generator ─────────────────────────────────────────
+        render_ai_question_generator(audit_id, dept, section, person_name, can_edit)
 
     # ══════════════════════════════════════════════════════════════════════════
     # VIEW B — Sub-question answering for one selected main question
