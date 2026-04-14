@@ -2717,6 +2717,58 @@ def _render_node_text(text: str) -> str:
             )
     return text
 
+
+
+PURCHASE_SAMPLE_SIZE_QUESTION = "Do incoming inspection plans define sample size, inspection or test method, and acceptance criteria?"
+PURCHASE_CROSS_Q1 = "Is the sample size statistically justified?"
+PURCHASE_CROSS_Q2 = "Has this deviation been identified internally and any correction or CAPA planned?"
+PURCHASE_YES_NO_OPTIONS = ["", "Yes", "No"]
+TOP_MGMT_CAPA_Q = PURCHASE_CROSS_Q2
+
+def _is_purchase_department(dept: str) -> bool:
+    return str(dept or "").strip().lower() == "purchase"
+
+def _is_purchase_cross_question(dept: str, node_text: str) -> bool:
+    if not _is_purchase_department(dept):
+        return False
+    text = " ".join(str(node_text or "").strip().split()).lower()
+    target = " ".join(PURCHASE_SAMPLE_SIZE_QUESTION.strip().split()).lower()
+    return target in text
+
+def _is_top_management_department(dept: str) -> bool:
+    return str(dept or "").strip().lower() == "top management"
+
+def _is_quality_assurance_department(dept: str) -> bool:
+    return str(dept or "").strip().lower() == "quality assurance"
+
+def _is_maintenance_department(dept: str) -> bool:
+    return str(dept or "").strip().lower() == "maintenance"
+
+def _norm_parent(v):
+    try:
+        iv = int(float(str(v))) if v is not None else None
+    except Exception:
+        iv = None
+    return str(iv) if iv is not None else ""
+
+def _effective_walk(all_rows, mrow, dept: str):
+    walk = _walk(all_rows, mrow)
+    if not _is_top_management_department(dept):
+        return walk
+    by_sr = {str(r.get("sr_no", "")): r for r in all_rows}
+    out = []
+    for node in walk:
+        lvl = str(node.get("item_level", "main")).strip().lower()
+        if lvl == "main":
+            out.append(node)
+            continue
+        parent_sr = str(_norm_parent(node.get("parent_order")) or "")
+        parent = by_sr.get(parent_sr)
+        parent_obs = str((parent or {}).get("observation", "") or "").strip()
+        if parent_obs == "Yes":
+            out.append(node)
+    return out
+
 def page_auditor_checklist():
     """
     Auditor Checklist — redesigned flow
@@ -2993,7 +3045,7 @@ def page_auditor_checklist():
                         _engine_call("save_updated_audit", audit_obj)
                         st.cache_data.clear()
                         st.rerun()
-    elif dep_key in {"purchase", "hr"}:
+    elif dep_key in {"purchase", "hr", "top management", "quality assurance"}:
         st.markdown(
             f'<div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;'
             f'padding:12px 16px;margin-bottom:16px;">'
@@ -3051,6 +3103,10 @@ def page_auditor_checklist():
         try: return int(float(str(v))) if v is not None else None
         except: return None
 
+    def _norm_parent(v):
+        iv = _int(v)
+        return str(iv) if iv is not None else ""
+
     def _kids(all_rows, parent_sr, level):
         p = _int(parent_sr)
         if p is None: return []
@@ -3071,8 +3127,26 @@ def page_auditor_checklist():
                 nodes.append(ss)
         return nodes
 
+    def _effective_walk(all_rows, mrow, dept: str):
+        walk = _walk(all_rows, mrow)
+        if not _is_top_management_department(dept):
+            return walk
+        by_sr = {str(r.get("sr_no", "")): r for r in all_rows}
+        out = []
+        for node in walk:
+            lvl = str(node.get("item_level", "main")).strip().lower()
+            if lvl == "main":
+                out.append(node)
+                continue
+            parent_sr = str(_norm_parent(node.get("parent_order")) or "")
+            parent = by_sr.get(parent_sr)
+            parent_obs = str((parent or {}).get("observation", "") or "").strip()
+            if parent_obs == "Yes":
+                out.append(node)
+        return out
+
     def _subtree_done(all_rows, mrow):
-        return all(_done(n) for n in _walk(all_rows, mrow))
+        return all(_done(n) for n in _effective_walk(all_rows, mrow, dept))
 
     def _node_label(all_rows, node, mains):
         lvl = str(node.get("item_level","")).strip()
@@ -3134,7 +3208,7 @@ def page_auditor_checklist():
             num_lbl  = "✓"    if is_done else f"Q{mi+1}"
 
             # count sub-nodes
-            sub_count = len(_walk(rows, mrow)) - 1  # exclude the main itself
+            sub_count = len(_effective_walk(rows, mrow, dept)) - 1  # exclude the main itself
 
             st.markdown(
                 f'<div class="ck-main-card {card_cls}">'
@@ -3151,7 +3225,7 @@ def page_auditor_checklist():
             btn_lbl = "✏️ Re-answer" if is_done else "▶ Start"
             if st.button(btn_lbl, key=f"ck_start_{audit_id}_{section}_{main_sr}",
                          type="secondary", use_container_width=False):
-                walk   = _walk(rows, mrow)
+                walk   = _effective_walk(rows, mrow, dept)
                 first  = next((n for n in walk if not _done(n)), walk[0])
                 st.session_state[main_key] = main_sr
                 st.session_state[step_key] = str(first.get("sr_no",""))
@@ -3196,7 +3270,7 @@ def page_auditor_checklist():
 
         mi     = next(i for i,m in enumerate(mains) if str(m.get("sr_no","")) == sel_main)
         q_text = str(mrow.get("checklist","")).strip() or "—"
-        walk   = _walk(rows, mrow)
+        walk   = _effective_walk(rows, mrow, dept)
         walk_srs = [str(n.get("sr_no","")) for n in walk]
         step_idx = walk_srs.index(sel_step) if sel_step in walk_srs else 0
 
@@ -3290,10 +3364,18 @@ def page_auditor_checklist():
                             unsafe_allow_html=True)
 
                 col_obs, col_ev = st.columns([1, 1])
-                obs = col_obs.text_area("Observation *", key=obs_k,
-                                        height=90, disabled=not can_edit)
-                ev  = col_ev.text_area("Evidence *",     key=ev_k,
-                                        height=90, disabled=not can_edit)
+                if str(st.session_state.get(obs_k, "")) not in PURCHASE_YES_NO_OPTIONS:
+                    st.session_state[obs_k] = ""
+                obs = col_obs.selectbox(
+                    "Observation *",
+                    options=PURCHASE_YES_NO_OPTIONS,
+                    index=PURCHASE_YES_NO_OPTIONS.index(st.session_state.get(obs_k, "")) if st.session_state.get(obs_k, "") in PURCHASE_YES_NO_OPTIONS else 0,
+                    key=obs_k,
+                    disabled=not can_edit,
+                )
+                ev  = col_ev.text_area("Evidence *", key=ev_k,
+                                        height=90, disabled=not can_edit,
+                                        placeholder="Enter evidence / reference")
 
                 _cl1, _cl2 = st.columns([1, 1])
                 _cur_main = st.session_state.get(clause_main_k, "")
@@ -3318,6 +3400,71 @@ def page_auditor_checklist():
                 )
                 clause_no = _sel_sub if _sel_sub else _sel_main
 
+                branch_answers = dict(node.get("branch_answers") or {}) if isinstance(node.get("branch_answers"), dict) else {}
+                needs_branch_save = False
+                ans_capa_k = f"ck_branch_capa::{audit_id}::{section}::{node_sr}"
+                ans_stat_k = f"ck_branch_stat::{audit_id}::{section}::{node_sr}"
+                if ans_capa_k not in st.session_state:
+                    st.session_state[ans_capa_k] = str(branch_answers.get("deviation_identified_capa_planned", ""))
+                if ans_stat_k not in st.session_state:
+                    st.session_state[ans_stat_k] = str(branch_answers.get("sample_size_statistically_justified", ""))
+
+                sample_answer = ""
+                capa_answer = ""
+                final_comment = ""
+
+                if _is_purchase_department(dept):
+                    needs_branch_save = True
+                    if obs == "No":
+                        capa_answer = st.selectbox(
+                            PURCHASE_CROSS_Q2,
+                            options=PURCHASE_YES_NO_OPTIONS,
+                            index=PURCHASE_YES_NO_OPTIONS.index(st.session_state.get(ans_capa_k, "")) if st.session_state.get(ans_capa_k, "") in PURCHASE_YES_NO_OPTIONS else 0,
+                            key=ans_capa_k,
+                            disabled=not can_edit,
+                        )
+                    elif _is_purchase_cross_question(dept, node_text) and obs == "Yes":
+                        sample_answer = st.selectbox(
+                            PURCHASE_CROSS_Q1,
+                            options=PURCHASE_YES_NO_OPTIONS,
+                            index=PURCHASE_YES_NO_OPTIONS.index(st.session_state.get(ans_stat_k, "")) if st.session_state.get(ans_stat_k, "") in PURCHASE_YES_NO_OPTIONS else 0,
+                            key=ans_stat_k,
+                            disabled=not can_edit,
+                        )
+                        if sample_answer == "No":
+                            capa_answer = st.selectbox(
+                                PURCHASE_CROSS_Q2,
+                                options=PURCHASE_YES_NO_OPTIONS,
+                                index=PURCHASE_YES_NO_OPTIONS.index(st.session_state.get(ans_capa_k, "")) if st.session_state.get(ans_capa_k, "") in PURCHASE_YES_NO_OPTIONS else 0,
+                                key=ans_capa_k,
+                                disabled=not can_edit,
+                            )
+                elif _is_top_management_department(dept) or _is_quality_assurance_department(dept) or _is_maintenance_department(dept):
+                    needs_branch_save = True
+                    if obs == "No":
+                        capa_answer = st.selectbox(
+                            TOP_MGMT_CAPA_Q,
+                            options=PURCHASE_YES_NO_OPTIONS,
+                            index=PURCHASE_YES_NO_OPTIONS.index(st.session_state.get(ans_capa_k, "")) if st.session_state.get(ans_capa_k, "") in PURCHASE_YES_NO_OPTIONS else 0,
+                            key=ans_capa_k,
+                            disabled=not can_edit,
+                        )
+
+                if capa_answer == "No":
+                    final_comment = "Note this as a non-conformity."
+                    st.error(final_comment)
+                elif capa_answer == "Yes":
+                    final_comment = "Record the reference to the correction or CAPA plan."
+                    st.info(final_comment)
+                elif _is_purchase_cross_question(dept, node_text) and obs == "Yes" and sample_answer == "Yes":
+                    st.success("Sample size is statistically justified. Continue with the next question.")
+
+                branch_answers = {
+                    "main_answer": obs,
+                    "sample_size_statistically_justified": sample_answer,
+                    "deviation_identified_capa_planned": capa_answer,
+                    "final_comment": final_comment,
+                }
                 is_last = (ni == len(walk) - 1)
                 btn_lbl  = "✅ Save & Finish" if is_last else "Save & Next ➜"
 
@@ -3327,6 +3474,12 @@ def page_auditor_checklist():
                                  type="primary", disabled=not can_edit):
                         if not str(obs or "").strip() or not str(ev or "").strip() or not str(clause_no or "").strip():
                             st.error("Observation, Evidence and Clause No. are all required.")
+                        elif (_is_purchase_department(dept) or _is_top_management_department(dept) or _is_quality_assurance_department(dept) or _is_maintenance_department(dept)) and str(obs or "") == "No" and not str(branch_answers.get("deviation_identified_capa_planned") or "").strip():
+                            st.error("Please answer whether this deviation has been identified internally and any correction or CAPA planned.")
+                        elif _is_purchase_cross_question(dept, node_text) and str(obs or "") == "Yes" and not str(branch_answers.get("sample_size_statistically_justified") or "").strip():
+                            st.error("Please answer whether the sample size is statistically justified.")
+                        elif _is_purchase_cross_question(dept, node_text) and str(obs or "") == "Yes" and str(branch_answers.get("sample_size_statistically_justified") or "") == "No" and not str(branch_answers.get("deviation_identified_capa_planned") or "").strip():
+                            st.error("Please answer whether this deviation has been identified internally and any correction or CAPA planned.")
                         else:
                             ok, msg = _engine_call(
                                 "save_single_checklist_response",
@@ -3334,6 +3487,12 @@ def page_auditor_checklist():
                                 sr_no=node_sr, observation=obs, evidence=ev,
                                 clause_no=str(clause_no or "").strip(),
                                 auditor_name=person_name)
+                            if ok and needs_branch_save:
+                                ok, msg = _engine_call(
+                                    "save_checklist_row_branch_answers",
+                                    audit_id=audit_id, dept=dept, section=section,
+                                    sr_no=node_sr, branch_answers=branch_answers,
+                                    auditor_name=person_name)
                             if not ok:
                                 st.error(msg)
                             else:
@@ -3342,7 +3501,13 @@ def page_auditor_checklist():
                                 st.session_state.pop(clause_k,    None)
                                 st.session_state.pop(clause_main_k, None)
                                 st.session_state.pop(clause_sub_k,  None)
-                                if is_last:
+                                if needs_branch_save:
+                                    st.session_state.pop(ans_capa_k, None)
+                                    st.session_state.pop(ans_stat_k, None)
+                                if (_is_top_management_department(dept) or _is_quality_assurance_department(dept) or _is_maintenance_department(dept)) and str(obs or "") == "No":
+                                    st.session_state[main_key] = None
+                                    st.session_state[step_key] = None
+                                elif is_last:
                                     # all nodes done → back to main list
                                     st.session_state[main_key] = None
                                     st.session_state[step_key] = None
@@ -3479,7 +3644,8 @@ def page_audit_details():
                     st.error(msg)
 
         st.markdown("#### 3) Complete Audit (blocked without submission)")
-        if st.button("Complete Audit", disabled=(not can_submit), key=f"ad_btn_complete_{audit.get('audit_id')}"):
+        complete_disabled = (audit.get("assigned_auditor") != person_name) or (audit.get("status") != "Report Submitted")
+        if st.button("Complete Audit", disabled=complete_disabled, key=f"ad_btn_complete_{audit.get('audit_id')}"):
             ok, msg = _engine_call("complete_audit", audit["audit_id"], person_name)
             if ok:
                 st.success(msg)
@@ -3667,7 +3833,7 @@ def page_reports():
                             if _summary:
                                 _elements.append(Paragraph(f"Summary: {_summary}", _sub_s))
                             _elements.append(Spacer(1, 3*mm))
-                            _sections = engine.get_sections_for_department(_dept, tenant_id=tenant_id) or []
+                            _sections = engine.get_generated_sections(_aid, _dept, tenant_id=tenant_id) or []
                             _tdata = [[Paragraph(c, _hdr) for c in _col_names]]
                             for _sec_name in _sections:
                                 _ck_rows = engine.get_checklist_rows_for_audit_section(
@@ -3734,7 +3900,7 @@ def page_reports():
             # Collect all rows across all sections for this audit
             def _build_export_rows(audit_id, dept, tid):
                 import re as _re
-                sections = engine.get_sections_for_department(dept, tenant_id=tid) or []
+                sections = engine.get_generated_sections(audit_id, dept, tenant_id=tid) or []
                 all_rows = []
                 for sec in sections:
                     ck_rows = engine.get_checklist_rows_for_audit_section(audit_id, dept, sec, tenant_id=tid) or []

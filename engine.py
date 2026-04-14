@@ -38,7 +38,7 @@ def _parse_iso_date(val) -> Optional[date]:
 
 UPLOADS_DIR = "uploads"
 DEFAULT_TENANT_CODE = os.getenv("DEFAULT_TENANT_CODE", "default")
-DEFAULT_DEPARTMENTS = ["HR", "MR", "Purchase", "Sales and Marketing", "Production","Quality Assurance", "Maintenance"]
+DEFAULT_DEPARTMENTS = ["HR", "MR", "Purchase", "Sales and Marketing", "Production","Quality Assurance", "Maintenance", "Top Management"]
 DEFAULT_SKILLS = {
     "hr_competency_training_requirements": "Understanding of competency and training requirements",
     "hr_review_training_records_effectiveness": "Ability to review training records and effectiveness",
@@ -945,6 +945,31 @@ _DEPARTMENT_DIRECT_CHECKLISTS: Dict[str, List[Dict[str, Any]]] = {
          "main": "When competence-related issues are identified, are corrective actions implemented and checked for effectiveness?",
          "subs": ["Are root causes analysed before deciding retraining or other actions?",
                   "Is recurrence checked after corrective action closure to confirm effectiveness?"]},
+
+    ],
+    "quality assurance": [
+        {"clause": "4.2.4 / 4.2.5", "section": "Document and Record Control",
+         "main": "Is there a documented procedure for control of documents and records?",
+         "subs": ["Are documents and records identifiable, legible and retrievable?",
+                  "Are documents and records reviewed and approved as per the documented procedure?",
+                  "Are document changes recorded with necessary revision history, approvals?",
+                  "Are obsolete documents retained till the lifetime of the medical devices or as per regulatory requirements, whichever is higher?",
+                  "Are records pertaining to design, manufacturing, testing retained till the lifetime of the medical device or as per regulatory requirements, whichever is higher?"]},
+        {"clause": "4.1", "section": "QMS Processes",
+         "main": "Are all processes and their interactions identified and documented?",
+         "subs": ["Are process risks identified and monitoring methods set based on a risk-based approach?"]},
+        {"clause": "4.2.2", "section": "Quality Manual",
+         "main": "Is a Quality Manual documented?",
+         "subs": ["Is the scope, the exclusions and non-applicable clauses documented in the Quality Manual with justifications?"]},
+        {"clause": "4.2.3", "section": "Medical Device Files",
+         "main": "Are medical device files documented?",
+         "subs": ["Is an adequate justification provided for their absence."]},
+        {"clause": "8.2.4", "section": "Internal Audit",
+         "main": "Are internal audits planned?",
+         "subs": ["Are internal audits conducted as per plan and records maintained?",
+                  "Are internal auditors competent and independent of the function they audit?",
+                  "Are corrective actions taken without undue delay for the non-conformities identified?",
+                  "Are corrective actions verified for their effectiveness?"]},
     ],
 }
 
@@ -977,7 +1002,83 @@ _DEPARTMENT_GENERATOR_CONFIG: Dict[str, Dict[str, Any]] = {
             "Includes identification of skills and competencies, role definition, gap identification, gap closure, and risk-based approach",
         ],
     },
+    "quality assurance": {
+        "mode": "direct",
+        "title": "Quality Assurance Checklist Generator",
+        "description": "Generate a clause-focused ISO 13485 quality assurance checklist covering document and record control, QMS processes, quality manual, medical device files, and internal audits.",
+        "button_label": "🚀 Generate Quality Assurance Checklist",
+        "focus_lines": [
+            "Primary focus: clauses 4.1, 4.2.2, 4.2.3, 4.2.4, 4.2.5 and 8.2.4",
+            "Uses Yes/No observation and CAPA follow-up when answer is No",
+            "Includes document control, record retention, process interaction, quality manual, medical device files, and internal audit flow",
+        ],
+    },
+    "top management": {
+        "mode": "direct",
+        "title": "Top Management Checklist Generator",
+        "description": "Generate a clause-focused ISO 13485 top management checklist covering quality policy, quality objectives, responsibilities, management review, and management representative responsibilities.",
+        "button_label": "🚀 Generate Top Management Checklist",
+        "focus_lines": [
+            "Primary focus: clauses 5.3, 5.4.1, 5.5.1, 5.5.2 and 5.6",
+            "Includes conditional follow-up questions on communication, monitoring, and management review records",
+            "Uses CAPA follow-up logic when observation is No",
+        ],
+    },
 }
+
+
+_TOP_MANAGEMENT_CHECKLIST: List[Dict[str, Any]] = [
+    {"clause": "5.3", "section": "Quality Policy", "main": "Is the organization’s quality policy appropriate to its purpose and provides a framework to set quality objectives?",
+     "subs": ["Is the quality policy effectively communicated within the organization?"]},
+    {"clause": "5.4.1", "section": "Quality Objectives", "main": "Are measurable quality objectives set at different levels in the organization?",
+     "subs": ["Are the quality objectives monitored regularly?"]},
+    {"clause": "5.5.1", "section": "Responsibilities and Authorities", "main": "Are job responsibilities set and communicated to everyone in the organization?",
+     "subs": []},
+    {"clause": "5.6", "section": "Management Review", "main": "Are Management Review Meetings (MRM) planned and held periodically?",
+     "subs": ["Do the management review discuss issues as mentioned in the ISO13485 and are records maintained?"]},
+    {"clause": "5.6", "section": "Management Review", "main": "Is there a documented procedure for conducting management reviews?",
+     "subs": []},
+    {"clause": "5.5.2", "section": "Management Representative", "main": "Has a Management Representative been appointed and allotted responsibilities?",
+     "subs": []},
+]
+
+def generate_top_management_checklist() -> List[Dict[str, Any]]:
+    items: List[Dict[str, Any]] = []
+    return_order = _append_hierarchical_items(items, _TOP_MANAGEMENT_CHECKLIST, start_order=0)
+    return items
+
+def save_top_management_checklist(audit_id: str, *, tenant_id: Optional[str] = None) -> Tuple[bool, str]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    a = get_audit(audit_id, tenant_id=tenant_id)
+    if not a:
+        return False, "Audit not found."
+    dept = _normalize_text(a.get("audited_department", ""))
+    if dept.lower() != "top management":
+        return False, "This checklist generator is only for Top Management."
+    generated_items = generate_top_management_checklist()
+    sections_map: Dict[str, List[Dict[str, Any]]] = {}
+    for item in generated_items:
+        sec = item.get("section", "General")
+        sections_map.setdefault(sec, []).append(item)
+    checklists: Dict[str, Dict[str, List]] = a.get("checklists", {}) if isinstance(a.get("checklists"), dict) else {}
+    checklists[dept] = {}
+    for sec, sec_items in sections_map.items():
+        rows = []
+        for item in sec_items:
+            rows.append({
+                "sr_no": str(item["item_order"]),
+                "checklist": f"[{item['clause_ref']}] {item['item_text']}",
+                "observation": "",
+                "evidence": "",
+                "clause_no": item["clause_ref"],
+                "item_level": item["item_level"],
+                "parent_order": item["parent_order"],
+            })
+        checklists[dept][sec] = rows
+    a["checklists"] = checklists
+    a["pre_audit_answers"] = {"generated_for": "top_management"}
+    _save_updated_audit(a, tenant_id=tenant_id)
+    return True, f"Checklist generated with {len(generated_items)} questions across {len(sections_map)} sections."
 
 def _department_key(dept: str) -> str:
     return _normalize_text(dept).lower()
@@ -1122,6 +1223,11 @@ def get_generated_sections(audit_id: str, dept: str, *, tenant_id: Optional[str]
     saved = (a.get("checklists") or {}).get(dept_n, {})
     return list(saved.keys()) if isinstance(saved, dict) else []
 # ── Keep CHECKLIST_CATALOG minimal for backward compat ────────────────────────
+
+
+PURCHASE_SAMPLE_SIZE_QUESTION = "Do incoming inspection plans define sample size, inspection or test method, and acceptance criteria?"
+PURCHASE_CROSS_Q1 = "Is the sample size statistically justified?"
+PURCHASE_CROSS_Q2 = "Has this deviation been identified internally and any correction or CAPA planned?"
 CHECKLIST_CATALOG: Dict[str, Dict[str, List[Dict[str, Any]]]] = {
     "Production": {},
     "Purchase": {},
@@ -1133,23 +1239,22 @@ def _catalog_key(s: str) -> str:
     return " ".join(str(s or "").strip().split())
 
 def get_sections_for_department(dept: str, tenant_id: Optional[str] = None, audit_id: Optional[str] = None) -> List[str]:
-    """Return sections for a department — checks audit's generated checklist first, then DB fallback."""
-    # If audit_id is provided, check if the audit has dynamically generated sections
+    """Return sections for a department.
+
+    For audit runtime, use only the generated checklist saved inside the audit record.
+    For admin checklist-library editing, keep DB access available when audit_id is not provided.
+    """
     if audit_id:
         try:
             tid = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
-            sections = get_generated_sections(audit_id, dept, tenant_id=tid)
-            if sections:
-                return sections
+            return get_generated_sections(audit_id, dept, tenant_id=tid)
         except Exception:
-            pass
+            return []
 
     key = _catalog_key(dept)
-    # Check hardcoded catalog
     for cat_dept, sections in CHECKLIST_CATALOG.items():
         if _catalog_key(cat_dept) == key and sections:
             return list(sections.keys())
-    # Fallback: DB (for admin-added custom sections)
     try:
         tid = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
         return [str(r["section"]) for r in _fetch_all(
@@ -1230,13 +1335,17 @@ def get_effective_checklist_items(audit_id: str, dept: str, section: str, tenant
     dept, section = _normalize_text(dept), _normalize_text(section)
     a = get_audit(audit_id, tenant_id=tenant_id)
     if not a: return []
-    catalog_items = [str(x).strip() for x in get_items_for_department_section(dept, section, tenant_id=tenant_id) if str(x).strip()]
+
+    generated_rows = (((a.get("checklists") or {}).get(dept) or {}).get(section) or [])
+    generated_items = [str(r.get("checklist", "")).strip() for r in generated_rows if str(r.get("checklist", "")).strip()]
+
     seen: Set[str] = set()
     out = []
-    for it in catalog_items + get_checklist_extras(a, dept, section):
-        k = it.strip().lower()
-        if k and k not in seen:
-            seen.add(k); out.append(it.strip())
+    for it in generated_items + get_checklist_extras(a, dept, section):
+        key = it.strip().lower()
+        if key and key not in seen:
+            seen.add(key)
+            out.append(it.strip())
     return out
 
 def add_checklist_extra_item(audit_id: str, dept: str, section: str, item_text: str, auditor_name: str, tenant_id: Optional[str] = None) -> Tuple[bool, str]:
@@ -1606,30 +1715,120 @@ def set_audit_status(audit_id: str, new_status: str, tenant_id: Optional[str] = 
     _save_updated_audit(a, tenant_id=tenant_id)
     return True, "Status updated."
 
+def _is_purchase_department_name(dept: str) -> bool:
+    return _normalize_text(dept).lower() == "purchase"
+
+def _is_top_management_department_name(dept: str) -> bool:
+    return _normalize_text(dept).lower() == "top management"
+
+def _is_quality_assurance_department_name(dept: str) -> bool:
+    return _normalize_text(dept).lower() == "quality assurance"
+
+def _is_maintenance_department_name(dept: str) -> bool:
+    return _normalize_text(dept).lower() == "maintenance"
+
+def _is_purchase_cross_question_text(text: str) -> bool:
+    t = " ".join(str(text or "").split()).lower()
+    return "do incoming inspection plans define sample size, inspection or test method, and acceptance criteria?" in t
+
+def _effective_rows_for_validation(rows: List[Dict[str, Any]], dept: str) -> List[Dict[str, Any]]:
+    dept_n = _normalize_text(dept)
+    if not _is_top_management_department_name(dept_n):
+        return [dict(r or {}) for r in (rows or []) if _normalize_text((r or {}).get("checklist", ""))]
+
+    out: List[Dict[str, Any]] = []
+    by_sr: Dict[str, Dict[str, Any]] = {}
+    for idx, r in enumerate(rows or [], start=1):
+        rr = dict(r or {})
+        sr = str(rr.get("sr_no", idx)).strip() or str(idx)
+        rr["sr_no"] = sr
+        by_sr[sr] = rr
+
+    for idx, r in enumerate(rows or [], start=1):
+        rr = dict(r or {})
+        chk = _normalize_text(rr.get("checklist", ""))
+        if not chk:
+            continue
+        lvl = str(rr.get("item_level", "main") or "main").strip().lower()
+        if lvl == "main":
+            out.append(rr)
+            continue
+        parent_sr = str(_norm_parent(rr.get("parent_order")) or "")
+        parent = by_sr.get(parent_sr)
+        parent_obs = _normalize_text((parent or {}).get("observation", ""))
+        if parent_obs == "yes":
+            out.append(rr)
+    return out
+
+def _row_complete_for_validation(row: Dict[str, Any], dept: str) -> bool:
+    obs = _normalize_text((row or {}).get("observation", ""))
+    evd = _normalize_text((row or {}).get("evidence", ""))
+    if not obs or not evd:
+        return False
+    branch = (row or {}).get("branch_answers") or {}
+    if not isinstance(branch, dict):
+        branch = {}
+
+    if (_is_purchase_department_name(dept) or _is_top_management_department_name(dept) or _is_quality_assurance_department_name(dept) or _is_maintenance_department_name(dept)) and obs.lower() == "no":
+        if not _normalize_text(branch.get("deviation_identified_capa_planned", "")):
+            return False
+
+    if _is_purchase_department_name(dept) and obs.lower() == "yes" and _is_purchase_cross_question_text((row or {}).get("checklist", "")):
+        stat = _normalize_text(branch.get("sample_size_statistically_justified", ""))
+        if not stat:
+            return False
+        if stat.lower() == "no" and not _normalize_text(branch.get("deviation_identified_capa_planned", "")):
+            return False
+
+    return True
+
 def _validate_checklist_complete(audit: Dict[str, Any], tenant_id: str) -> Tuple[bool, str]:
+    """Validate only the generated checklist rows that are actually active/visible for this audit path."""
     dept = _normalize_text(audit.get("audited_department", ""))
-    if not dept: return False, "Audit department is missing."
-    sections = get_sections_for_department(dept, tenant_id=tenant_id)
-    if not sections: return False, f"Checklist is not configured for department '{dept}'. Ask Admin to create checklist sections."
-    saved = (audit.get("checklists") or {}).get(dept, {})
-    if not isinstance(saved, dict): saved = {}
-    missing_sections, incomplete_examples = [], []
-    for sec in sections:
-        expected_items = list(dict.fromkeys(str(x).strip() for x in (get_items_for_department_section(dept, sec, tenant_id=tenant_id) + get_checklist_extras(audit, dept, sec)) if str(x).strip()))
-        if not expected_items: return False, f"Checklist section '{sec}' for department '{dept}' has no items."
-        rows = saved.get(sec)
-        if not rows: missing_sections.append(sec); continue
-        try: rows_sorted = sorted(rows, key=lambda r: int(str(r.get("sr_no", "0")).strip() or 0))
-        except Exception: rows_sorted = list(rows)
-        if len(rows_sorted) < len(expected_items): incomplete_examples.append(f"{sec} (missing rows)"); continue
-        for idx in range(len(expected_items)):
-            r = rows_sorted[idx] if idx < len(rows_sorted) else {}
-            if not _normalize_text(r.get("observation", "")) or not _normalize_text(r.get("evidence", "")):
-                incomplete_examples.append(f"{sec} (SR {str(r.get('sr_no', idx + 1)).strip() or str(idx + 1)})"); break
-    if missing_sections: return False, "Checklist incomplete. No saved responses for sections: " + ", ".join(missing_sections)
+    if not dept:
+        return False, "Audit department is missing."
+
+    all_checklists = audit.get("checklists") or {}
+    if not isinstance(all_checklists, dict):
+        return False, "Checklist is not filled yet. Please fill Observation and Evidence before submitting."
+
+    saved = all_checklists.get(dept, {})
+    if not isinstance(saved, dict) or not saved:
+        return False, "Checklist is not filled yet. Please fill Observation and Evidence before submitting."
+
+    missing_sections: List[str] = []
+    incomplete_examples: List[str] = []
+    any_rows = False
+
+    for sec, rows in saved.items():
+        sec_name = _normalize_text(sec)
+        if not sec_name:
+            continue
+        if not isinstance(rows, list) or not rows:
+            missing_sections.append(sec_name or str(sec))
+            continue
+
+        rows_to_check = _effective_rows_for_validation(rows, dept)
+        if not rows_to_check:
+            missing_sections.append(sec_name or str(sec))
+            continue
+
+        any_rows = True
+        for idx, r in enumerate(rows_to_check, start=1):
+            rr = r or {}
+            sr = str(rr.get("sr_no", idx)).strip() or str(idx)
+            if not _row_complete_for_validation(rr, dept):
+                incomplete_examples.append(f"{sec_name} (SR {sr})")
+                break
+
+    if not any_rows:
+        return False, "Checklist is not filled yet. Please fill Observation and Evidence before submitting."
+    if missing_sections:
+        return False, "Checklist incomplete. No saved responses for sections: " + ", ".join(missing_sections)
     if incomplete_examples:
         sample = ", ".join(incomplete_examples[:5])
-        return False, f"Checklist incomplete. Fill Observation and Evidence for every row. Incomplete examples: {sample}{'  (+' + str(len(incomplete_examples) - 5) + ' more)' if len(incomplete_examples) > 5 else ''}"
+        more = f"  (+{len(incomplete_examples) - 5} more)" if len(incomplete_examples) > 5 else ""
+        return False, f"Checklist incomplete. Fill Observation, Evidence, and required follow-up answers for every visible question. Incomplete examples: {sample}{more}"
     return True, "Checklist complete."
 
 def submit_report(audit_id: str, auditor_name: str, tenant_id: Optional[str] = None) -> Tuple[bool, str]:
@@ -1772,20 +1971,23 @@ def get_checklist_rows_for_audit_section(audit_id: str, dept: str, section: str,
         missing_hierarchy = False
         for idx, r in enumerate(saved, start=1):
             # sr_no must never be empty — fall back to enumerate index
-            sr = str(r.get("sr_no", "")).strip() or str(idx)
-            item_level = r.get("item_level")
-            parent_order = r.get("parent_order")
+            rr = dict(r or {})
+            sr = str(rr.get("sr_no", "")).strip() or str(idx)
+            item_level = rr.get("item_level")
+            parent_order = rr.get("parent_order")
             if item_level is None and parent_order is None:
                 missing_hierarchy = True
-            out.append({
+            row_out = dict(rr)
+            row_out.update({
                 "sr_no":        sr,
-                "checklist":    str(r.get("checklist", "")).strip(),
-                "observation":  str(r.get("observation", "") or "").strip(),
-                "evidence":     str(r.get("evidence", "") or "").strip(),
-                "clause_no":    str(r.get("clause_no", "") or "").strip(),
-                "item_level":   str(r.get("item_level", "main") or "main").strip() or "main",
-                "parent_order": _norm_parent(r.get("parent_order")),
+                "checklist":    str(rr.get("checklist", "")).strip(),
+                "observation":  str(rr.get("observation", "") or "").strip(),
+                "evidence":     str(rr.get("evidence", "") or "").strip(),
+                "clause_no":    str(rr.get("clause_no", "") or "").strip(),
+                "item_level":   str(rr.get("item_level", "main") or "main").strip() or "main",
+                "parent_order": _norm_parent(rr.get("parent_order")),
             })
+            out.append(row_out)
     
         # If the saved table is older (no hierarchy fields), rebuild it from the latest
         # hierarchical catalog for this dept/section; keep existing observations/evidence.
@@ -1911,6 +2113,8 @@ def save_single_checklist_response(audit_id: str, dept: str, section: str, sr_no
     rows[idx]["item_level"]   = str(rows[idx].get("item_level","main") or "main").strip() or "main"
     rows[idx]["parent_order"] = _norm_parent(rows[idx].get("parent_order"))
     rows[idx]["sr_no"]        = str(rows[idx].get("sr_no","")).strip() or sr_no_s
+    if "branch_answers" in rows[idx] and not isinstance(rows[idx].get("branch_answers"), dict):
+        rows[idx]["branch_answers"] = {}
     return save_audit_section_table(
         audit_id=audit_id, dept=dept_n, section=section_n,
         rows=rows, auditor_name=auditor_name, tenant_id=tenant_id
@@ -1926,26 +2130,38 @@ def add_audit_section_checklist_item(audit_id: str, dept: str, section: str, che
     rows.append({"sr_no": str(len(rows) + 1), "checklist": checklist_text, "observation": "", "evidence": ""})
     return save_audit_section_table(audit_id=audit_id, dept=dept, section=section, rows=rows, auditor_name=auditor_name, tenant_id=tenant_id)
 
+
+
+def save_checklist_row_branch_answers(
+    audit_id: str,
+    dept: str,
+    section: str,
+    sr_no: str,
+    branch_answers: Dict[str, Any],
+    *,
+    auditor_name: Optional[str] = None,
+    tenant_id: Optional[str] = None,
+) -> Tuple[bool, str]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    sr_no_s = str(sr_no or "").strip()
+    if not sr_no_s:
+        return False, "sr_no is required."
+    dept_n, section_n = _normalize_text(dept), _normalize_text(section)
+    rows = get_checklist_rows_for_audit_section(audit_id, dept_n, section_n, tenant_id=tenant_id)
+    idx = next((i for i, r in enumerate(rows) if str(r.get("sr_no","")).strip() == sr_no_s), None)
+    if idx is None:
+        return False, f"Checklist row '{sr_no_s}' not found. Please reload the checklist."
+    rows[idx]["branch_answers"] = dict(branch_answers or {})
+    return save_audit_section_table(
+        audit_id=audit_id, dept=dept_n, section=section_n,
+        rows=rows, auditor_name=auditor_name, tenant_id=tenant_id
+    )
 def validate_audit_checklists_complete(audit_id: str, tenant_id: Optional[str] = None) -> Tuple[bool, str]:
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
     a = get_audit(audit_id, tenant_id=tenant_id)
-    if not a: return False, "Audit not found."
-    checklists = a.get("checklists") or {}
-    if not isinstance(checklists, dict) or not checklists: return False, "Checklist is not filled yet. Please fill Observation and Evidence before submitting."
-    any_rows = False
-    for dept, sec_map in checklists.items():
-        if not isinstance(sec_map, dict): continue
-        for section, rows in sec_map.items():
-            if not rows: continue
-            any_rows = True
-            for r in rows:
-                chk = str((r or {}).get("checklist", "")).strip()
-                obs = str((r or {}).get("observation", "")).strip()
-                evd = str((r or {}).get("evidence", "")).strip()
-                if not chk: return False, "Checklist has an empty point. Please remove or fill it before submitting."
-                if not obs or not evd: return False, "Checklist incomplete. Please fill Observation and Evidence for all points before submitting."
-    if not any_rows: return False, "Checklist is not filled yet. Please fill Observation and Evidence before submitting."
-    return True, "Checklist complete."
+    if not a:
+        return False, "Audit not found."
+    return _validate_checklist_complete(a, tenant_id=tenant_id)
 
 # ── Auditor CRUD ──────────────────────────────────────────────────────────────
 def add_auditor(name: str, department: str, level: str, skills: Set[str], password: str = "auditor123", tenant_id: Optional[str] = None) -> Tuple[bool, str]:
@@ -2636,7 +2852,7 @@ def get_all_completed_answers(
     """Return every answered checklist row across ALL sections for the given audit + dept."""
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
     dept_n = _normalize_text(dept)
-    sections = get_sections_for_department(dept_n, tenant_id=tenant_id)
+    sections = get_generated_sections(audit_id, dept_n, tenant_id=tenant_id) or get_sections_for_department(dept_n, tenant_id=tenant_id, audit_id=audit_id)
     completed: List[Dict[str, Any]] = []
     for section in sections:
         rows = get_checklist_rows_for_audit_section(audit_id, dept_n, section, tenant_id=tenant_id)
@@ -2662,7 +2878,7 @@ def get_all_pending_questions(
     """Return every unanswered checklist row across ALL sections."""
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
     dept_n = _normalize_text(dept)
-    sections = get_sections_for_department(dept_n, tenant_id=tenant_id)
+    sections = get_generated_sections(audit_id, dept_n, tenant_id=tenant_id) or get_sections_for_department(dept_n, tenant_id=tenant_id, audit_id=audit_id)
     pending: List[Dict[str, Any]] = []
     for section in sections:
         rows = get_checklist_rows_for_audit_section(audit_id, dept_n, section, tenant_id=tenant_id)
@@ -2992,7 +3208,7 @@ def generate_ai_questions_for_department(
     """Generate smart follow-up questions (main + subs) for every section. FREE."""
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
     dept_n = _normalize_text(dept)
-    sections = get_sections_for_department(dept_n, tenant_id=tenant_id)
+    sections = get_generated_sections(audit_id, dept_n, tenant_id=tenant_id) or get_sections_for_department(dept_n, tenant_id=tenant_id, audit_id=audit_id)
     results = []
     for section in sections:
         for _ in range(max_per_section):
