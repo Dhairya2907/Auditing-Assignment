@@ -87,6 +87,60 @@ def _tenant_generated_reports_dir(tenant_id: str) -> str:
     os.makedirs(d, exist_ok=True)
     return d
 
+# ── Report Settings (header / footer / watermark) ────────────────────────────
+_REPORT_SETTINGS_DEFAULTS: Dict[str, Any] = {
+    "header": {
+        "company_name": "",
+        "report_title": "ISO 13485 Audit Report",
+        "tagline": "",
+        "show_divider": True,
+    },
+    "footer": {
+        "left_text": "ISO 13485 Audit Report — Confidential",
+        "center_text": "",
+        "right_text": "Page {page}",
+    },
+    "watermark": {
+        "enabled": False,
+        "text": "CONFIDENTIAL",
+        "opacity": 0.08,
+        "angle": 45,
+        "font_size": 72,
+        "color": "#cccccc",
+    },
+}
+
+def _report_settings_path(tenant_id: str) -> str:
+    root = _tenant_root_dir(tenant_id)
+    os.makedirs(root, exist_ok=True)
+    return os.path.join(root, "report_settings.json")
+
+def get_report_settings(*, tenant_id: Optional[str] = None) -> Dict[str, Any]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    path = _report_settings_path(tenant_id)
+    if not os.path.exists(path):
+        return {k: dict(v) for k, v in _REPORT_SETTINGS_DEFAULTS.items()}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+        # Deep-merge with defaults so new keys are always present
+        merged: Dict[str, Any] = {}
+        for section, defaults in _REPORT_SETTINGS_DEFAULTS.items():
+            merged[section] = {**defaults, **saved.get(section, {})}
+        return merged
+    except Exception:
+        return {k: dict(v) for k, v in _REPORT_SETTINGS_DEFAULTS.items()}
+
+def save_report_settings(settings: Dict[str, Any], *, tenant_id: Optional[str] = None) -> Tuple[bool, str]:
+    tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
+    try:
+        path = _report_settings_path(tenant_id)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(settings, f, indent=2, ensure_ascii=False)
+        return True, "Report settings saved."
+    except Exception as e:
+        return False, f"Failed to save settings: {e}"
+
 # ── Password helpers ──────────────────────────────────────────────────────────
 def _pbkdf2_hash(password: str, salt_hex: str, iterations: int) -> str:
     return hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), bytes.fromhex(salt_hex), iterations).hex()
@@ -831,6 +885,114 @@ _ISO_CLAUSE_QUESTIONS: List[Dict[str, Any]] = [
               "Are records of actions relating to the issuance of advisory notices maintained?"]},
 ]
 
+
+
+def generate_production_advanced_checklist() -> List[Dict[str, Any]]:
+    """Clause-driven production checklist split into named sections matching QA style."""
+    items: List[Dict[str, Any]] = []
+
+    def add_main(order: int, clause: str, text: str, sec: str, *, nc_if_no: bool = False) -> None:
+        items.append({
+            "item_order": order,
+            "item_text": text,
+            "item_level": "main",
+            "parent_order": None,
+            "clause_ref": clause,
+            "section": sec,
+            "nc_if_no": bool(nc_if_no),
+        })
+
+    def add_sub(order: int, parent_order: int, clause: str, text: str, sec: str, *,
+                show_if_parent_obs: str = "Yes", nc_if_no: bool = False,
+                show_if_sr_obs: Optional[Dict[str, str]] = None) -> None:
+        row = {
+            "item_order": order,
+            "item_text": text,
+            "item_level": "sub",
+            "parent_order": parent_order,
+            "clause_ref": clause,
+            "section": sec,
+            "show_if_parent_obs": str(show_if_parent_obs or "").strip(),
+            "nc_if_no": bool(nc_if_no),
+        }
+        if show_if_sr_obs:
+            row["show_if_sr_obs"] = {str(k): str(v) for k, v in show_if_sr_obs.items()}
+        items.append(row)
+
+    S1 = "Production Procedures"
+    S2 = "Sterilization"
+    S3 = "Process Validation"
+    S4 = "Inspection and Traceability"
+    S5 = "Preservation and Packaging"
+    S6 = "Measuring Instruments"
+
+    # ── Section 1: Clause 7.5.1 ───────────────────────────────────────────────
+    add_main(1,  "7.5.1", "Are procedures for production documented?", S1)
+    add_main(2,  "7.5.1", "Are methods parameters for measurement and monitoring of production operations set?", S1)
+    add_main(3,  "7.5.1", "Are methods for product release defined?", S1)
+    add_main(4,  "7.5.1", "Are batch monitoring records available?", S1)
+    add_sub (5,  4, "7.5.1",
+             "Is there any alternate method to document the traceability, amount manufactured and amount distributed?",
+             S1, show_if_parent_obs="No", nc_if_no=True)
+
+    # ── Section 2: Clause 7.5.5 / 7.5.7 ─────────────────────────────────────
+    add_main(6,  "7.5.5", "Is the device sterile?", S2)
+    add_sub (7,  6, "7.5.5",
+             "Is the sterilization process validated as per applicable standard?",
+             S2, show_if_parent_obs="Yes", nc_if_no=True)
+    add_sub (8,  6, "7.5.7",
+             "Is the sterile barrier packaging process validated?",
+             S2, show_if_parent_obs="Yes", nc_if_no=True)
+
+    # ── Section 3: Clause 7.5.6 ───────────────────────────────────────────────
+    add_main(9,  "7.5.6", "Are there any processes that require validation?", S3)
+    add_sub (10, 9, "7.5.6",
+             "Is a procedure for validation or validation master plan prepared?",
+             S3, show_if_parent_obs="Yes", nc_if_no=True)
+    add_sub (11, 9, "7.5.6",
+             "Are all processes that require validation, validated and records maintained?",
+             S3, show_if_parent_obs="Yes", nc_if_no=True)
+    add_sub (12, 9, "7.5.6",
+             "Are software used in QMS validated and records maintained?",
+             S3, show_if_parent_obs="Yes", nc_if_no=True)
+
+    # ── Section 4: Clause 7.5.8 / 7.5.9 ─────────────────────────────────────
+    add_main(13, "7.5.8",
+             "Is the product inspection status maintained throughout the product manufacturing, "
+             "storage, installation and servicing, by appropriate means?",
+             S4, nc_if_no=True)
+    add_main(14, "7.5.9", "Is the device implantable?", S4)
+    add_sub (15, 14, "7.5.9.2",
+             "Do the manufacturing records maintain traceability to materials and components "
+             "used and to the environmental conditions?",
+             S4, show_if_parent_obs="Yes", nc_if_no=True)
+
+    # ── Section 5: Clause 7.5.10 / 7.5.11 ───────────────────────────────────
+    add_main(16, "7.5.10", "Is there any customer property used?", S5)
+    add_sub (17, 16, "7.5.10",
+             "Is the customer property identified, protected and safeguarded?",
+             S5, show_if_parent_obs="Yes", nc_if_no=True)
+    add_main(18, "7.5.11",
+             "Are proper preservation methods documented and followed during processing, "
+             "storage, handling and distribution?",
+             S5, nc_if_no=True)
+    add_main(19, "7.5.11",
+             "Are package and shipping containers validated for their suitability to protect the devices?",
+             S5, nc_if_no=True)
+
+    # ── Section 6: Clause 7.6 ────────────────────────────────────────────────
+    add_main(20, "7.6",
+             "Are measuring instruments identified and calibrated to national or international standards?",
+             S6, nc_if_no=True)
+    add_main(21, "7.6",
+             "Are measuring instruments protected during handling and from unwanted adjustments?",
+             S6, nc_if_no=True)
+    add_main(22, "7.6",
+             "If any measuring instrument is found to be defective, are previous recorded "
+             "measurements assessed and validated?",
+             S6, nc_if_no=True)
+    return items
+
 _DEPARTMENT_DIRECT_CHECKLISTS: Dict[str, List[Dict[str, Any]]] = {
     "purchase": [
         {"clause": "7.4.1", "section": "Supplier Selection and Evaluation",
@@ -971,14 +1133,59 @@ _DEPARTMENT_DIRECT_CHECKLISTS: Dict[str, List[Dict[str, Any]]] = {
                   "Are corrective actions taken without undue delay for the non-conformities identified?",
                   "Are corrective actions verified for their effectiveness?"]},
     ],
+    "maintenance": [
+        {"clause": "6.3", "section": "Preventive Maintenance",
+         "main": "Is a preventive maintenance schedule defined and documented for all critical equipment?",
+         "subs": ["Does the schedule specify maintenance frequency, responsible person, and tasks to be performed?",
+                  "Are PM completion rates tracked and reported?",
+                  "When maintenance is overdue, is the equipment taken out of service or a risk assessment performed?"]},
+        {"clause": "6.3", "section": "Preventive Maintenance",
+         "main": "Are preventive maintenance activities carried out by qualified personnel and records maintained?",
+         "subs": ["Do maintenance records include equipment ID, date, tasks performed, and sign-off?",
+                  "Are calibration or functional checks performed after maintenance activities where required?"]},
+        {"clause": "7.6", "section": "Calibration",
+         "main": "Is there a calibration master list identifying all monitoring and measuring instruments?",
+         "subs": ["Does the master list include instrument ID, location, calibration interval, and calibration due date?",
+                  "Is the master list reviewed and updated periodically to reflect new, retired, or relocated instruments?"]},
+        {"clause": "7.6", "section": "Calibration",
+         "main": "Are calibration intervals defined and is calibration performed by accredited laboratories?",
+         "subs": ["Are calibration certificates traceable to national or international standards?",
+                  "Is the uncertainty of measurement documented on the calibration certificate?",
+                  "Are calibration due dates marked on the instruments and tracked in a log?"]},
+        {"clause": "7.6", "section": "Calibration",
+         "main": "When an instrument is found out of calibration, are previous measurements assessed for impact?",
+         "subs": ["Is there a documented procedure for handling out-of-calibration instruments?",
+                  "Are affected batches or products evaluated when an instrument fails calibration?"]},
+        {"clause": "7.5.6", "section": "Equipment Qualification",
+         "main": "Are critical equipment subjected to installation, operational, and performance qualification (IQ/OQ/PQ) before use?",
+         "subs": ["Are qualification protocols approved before execution?",
+                  "Are qualification reports reviewed and approved by the quality function?"]},
+        {"clause": "7.5.6", "section": "Equipment Qualification",
+         "main": "Is a requalification schedule defined and followed for qualified equipment?",
+         "subs": ["Are equipment changes evaluated to determine if requalification is required?",
+                  "Are change control records linked to the equipment qualification status?"]},
+        {"clause": "6.3", "section": "Infrastructure",
+         "main": "Is the infrastructure adequate and maintained to support the production of conforming medical devices?",
+         "subs": ["Is there a documented list of infrastructure items critical to product quality?",
+                  "Are breakdown and downtime records maintained and analysed for recurring failures?"]},
+        {"clause": "6.4", "section": "Infrastructure",
+         "main": "Are work environment conditions defined, controlled, and monitored where they affect product quality?",
+         "subs": ["Are monitoring records maintained for critical environmental parameters such as temperature, humidity, or cleanliness?",
+                  "Are out-of-limit environmental conditions documented and acted upon before production continues?"]},
+    ],
 }
 
 _DEPARTMENT_GENERATOR_CONFIG: Dict[str, Dict[str, Any]] = {
     "production": {
-        "mode": "pre_audit",
-        "title": "Pre-Audit Product Classification",
-        "description": "Answer the following 4 questions to generate your ISO 13485 production checklist. The checklist will be customized based on the product type.",
-        "button_label": "🚀 Generate Audit Checklist",
+        "mode": "direct",
+        "title": "Production Checklist Generator",
+        "description": "Generate the advanced ISO 13485 production checklist covering clauses 7.5 and 7.6 with conditional flow, sterilization logic, validation logic, traceability, preservation, and measuring instrument controls.",
+        "button_label": "🚀 Generate Production Checklist",
+        "focus_lines": [
+            "Primary focus: clauses 7.5, 7.5.6, 7.5.7, 7.5.8, 7.5.9, 7.5.10, 7.5.11 and 7.6",
+            "Includes conditional branching for batch monitoring, sterilization, validation, implantable devices, and customer property",
+            "Uses direct non-conformity comments where specified, without CAPA follow-up",
+        ],
     },
     "purchase": {
         "mode": "direct",
@@ -1024,6 +1231,17 @@ _DEPARTMENT_GENERATOR_CONFIG: Dict[str, Dict[str, Any]] = {
             "Uses CAPA follow-up logic when observation is No",
         ],
     },
+    "maintenance": {
+        "mode": "direct",
+        "title": "Maintenance Checklist Generator",
+        "description": "Generate a clause-focused ISO 13485 maintenance checklist covering preventive maintenance, calibration, equipment qualification, and infrastructure and work environment controls.",
+        "button_label": "🚀 Generate Maintenance Checklist",
+        "focus_lines": [
+            "Primary focus: clauses 6.3, 6.4, 7.6 and 7.5.6",
+            "Covers preventive maintenance schedules, calibration master list, IQ/OQ/PQ qualification, and environmental monitoring",
+            "Uses CAPA follow-up logic when observation is No",
+        ],
+    },
 }
 
 
@@ -1065,7 +1283,7 @@ def save_top_management_checklist(audit_id: str, *, tenant_id: Optional[str] = N
     for sec, sec_items in sections_map.items():
         rows = []
         for item in sec_items:
-            rows.append({
+            row_payload = {
                 "sr_no": str(item["item_order"]),
                 "checklist": f"[{item['clause_ref']}] {item['item_text']}",
                 "observation": "",
@@ -1073,7 +1291,11 @@ def save_top_management_checklist(audit_id: str, *, tenant_id: Optional[str] = N
                 "clause_no": item["clause_ref"],
                 "item_level": item["item_level"],
                 "parent_order": item["parent_order"],
-            })
+            }
+            for extra_key in ["show_if_parent_obs", "show_if_sr_obs", "nc_if_no"]:
+                if extra_key in item:
+                    row_payload[extra_key] = item.get(extra_key)
+            rows.append(row_payload)
         checklists[dept][sec] = rows
     a["checklists"] = checklists
     a["pre_audit_answers"] = {"generated_for": "top_management"}
@@ -1145,7 +1367,9 @@ def generate_department_checklist(dept: str, answers: Optional[Dict[str, bool]] 
     dep_key = _department_key(dept)
     answers = answers or {}
     if dep_key == "production":
-        return generate_checklist_from_pre_audit(answers)
+        return generate_production_advanced_checklist()
+    if dep_key == "top management":
+        return generate_top_management_checklist()
     direct_rows = _DEPARTMENT_DIRECT_CHECKLISTS.get(dep_key, [])
     items: List[Dict[str, Any]] = []
     _append_hierarchical_items(items, direct_rows, 0)
@@ -1164,7 +1388,7 @@ def _save_generated_items_to_audit(a: Dict[str, Any], dept: str, answers_payload
     for sec, sec_items in sections_map.items():
         rows = []
         for item in sec_items:
-            rows.append({
+            row_payload = {
                 "sr_no": str(item["item_order"]),
                 "checklist": f"[{item['clause_ref']}] {item['item_text']}",
                 "observation": "",
@@ -1172,7 +1396,11 @@ def _save_generated_items_to_audit(a: Dict[str, Any], dept: str, answers_payload
                 "clause_no": item["clause_ref"],
                 "item_level": item["item_level"],
                 "parent_order": item["parent_order"],
-            })
+            }
+            for extra_key in ["show_if_parent_obs", "show_if_sr_obs", "nc_if_no"]:
+                if extra_key in item:
+                    row_payload[extra_key] = item.get(extra_key)
+            rows.append(row_payload)
         checklists[dept][sec] = rows
     a["pre_audit_answers"] = answers_payload
     a["checklists"] = checklists
@@ -1188,7 +1416,9 @@ def save_generated_department_checklist(audit_id: str, answers: Optional[Dict[st
     dep_key = _department_key(dept)
     answers = answers or {}
     if dep_key == "production":
-        return save_pre_audit_answers(audit_id, answers, tenant_id=tenant_id)
+        generated_items = generate_production_advanced_checklist()
+        answers_payload = {"generator_department": "production", "generated_at": _now_iso()}
+        return _save_generated_items_to_audit(a, dept, answers_payload, generated_items, tenant_id=tenant_id)
     generated_items = generate_department_checklist(dept, answers)
     answers_payload = {"generator_department": dep_key, "generated_at": _now_iso()}
     return _save_generated_items_to_audit(a, dept, answers_payload, generated_items, tenant_id=tenant_id)
@@ -1727,36 +1957,51 @@ def _is_quality_assurance_department_name(dept: str) -> bool:
 def _is_maintenance_department_name(dept: str) -> bool:
     return _normalize_text(dept).lower() == "maintenance"
 
+def _is_production_department_name(dept: str) -> bool:
+    return _normalize_text(dept).lower() == "production"
+
 def _is_purchase_cross_question_text(text: str) -> bool:
     t = " ".join(str(text or "").split()).lower()
     return "do incoming inspection plans define sample size, inspection or test method, and acceptance criteria?" in t
 
-def _effective_rows_for_validation(rows: List[Dict[str, Any]], dept: str) -> List[Dict[str, Any]]:
-    dept_n = _normalize_text(dept)
-    if not _is_top_management_department_name(dept_n):
-        return [dict(r or {}) for r in (rows or []) if _normalize_text((r or {}).get("checklist", ""))]
+def _row_is_active_for_validation(row: Dict[str, Any], by_sr: Dict[str, Dict[str, Any]], dept: str) -> bool:
+    rr = dict(row or {})
+    chk = _normalize_text(rr.get("checklist", ""))
+    if not chk:
+        return False
+    lvl = str(rr.get("item_level", "main") or "main").strip().lower()
+    if lvl == "main":
+        return True
+    parent_sr = str(_norm_parent(rr.get("parent_order")) or "")
+    parent = by_sr.get(parent_sr)
+    parent_obs = _normalize_text((parent or {}).get("observation", ""))
+    explicit_parent_rule = _normalize_text(rr.get("show_if_parent_obs", ""))
+    if explicit_parent_rule:
+        if parent_obs.lower() != explicit_parent_rule.lower():
+            return False
+    elif _is_top_management_department_name(dept):
+        if parent_obs.lower() != "yes":
+            return False
+    extra_dep = rr.get("show_if_sr_obs") or {}
+    if isinstance(extra_dep, dict):
+        for dep_sr, dep_obs in extra_dep.items():
+            dep_row = by_sr.get(str(dep_sr).strip())
+            got = _normalize_text((dep_row or {}).get("observation", ""))
+            if got.lower() != _normalize_text(dep_obs).lower():
+                return False
+    return True
 
+def _effective_rows_for_validation(rows: List[Dict[str, Any]], dept: str) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     by_sr: Dict[str, Dict[str, Any]] = {}
+    normalized_rows: List[Dict[str, Any]] = []
     for idx, r in enumerate(rows or [], start=1):
         rr = dict(r or {})
-        sr = str(rr.get("sr_no", idx)).strip() or str(idx)
-        rr["sr_no"] = sr
-        by_sr[sr] = rr
-
-    for idx, r in enumerate(rows or [], start=1):
-        rr = dict(r or {})
-        chk = _normalize_text(rr.get("checklist", ""))
-        if not chk:
-            continue
-        lvl = str(rr.get("item_level", "main") or "main").strip().lower()
-        if lvl == "main":
-            out.append(rr)
-            continue
-        parent_sr = str(_norm_parent(rr.get("parent_order")) or "")
-        parent = by_sr.get(parent_sr)
-        parent_obs = _normalize_text((parent or {}).get("observation", ""))
-        if parent_obs == "yes":
+        rr["sr_no"] = str(rr.get("sr_no", idx)).strip() or str(idx)
+        normalized_rows.append(rr)
+        by_sr[rr["sr_no"]] = rr
+    for rr in normalized_rows:
+        if _row_is_active_for_validation(rr, by_sr, dept):
             out.append(rr)
     return out
 
@@ -1769,7 +2014,7 @@ def _row_complete_for_validation(row: Dict[str, Any], dept: str) -> bool:
     if not isinstance(branch, dict):
         branch = {}
 
-    if (_is_purchase_department_name(dept) or _is_top_management_department_name(dept) or _is_quality_assurance_department_name(dept) or _is_maintenance_department_name(dept)) and obs.lower() == "no":
+    if (_is_purchase_department_name(dept) or _is_top_management_department_name(dept) or _is_quality_assurance_department_name(dept)) and obs.lower() == "no":
         if not _normalize_text(branch.get("deviation_identified_capa_planned", "")):
             return False
 
@@ -2095,7 +2340,7 @@ def get_checklist_progress(audit_id: str, dept: str, section: str, *, tenant_id:
         "total_rows":       len(rows),
     }
 
-def save_single_checklist_response(audit_id: str, dept: str, section: str, sr_no: str, observation: str, evidence: str, *, clause_no: str = "", auditor_name: Optional[str] = None, tenant_id: Optional[str] = None) -> Tuple[bool, str]:
+def save_single_checklist_response(audit_id: str, dept: str, section: str, sr_no: str, observation: str, evidence: str, *, clause_no: str = "", full_observation: str = "", auditor_name: Optional[str] = None, tenant_id: Optional[str] = None) -> Tuple[bool, str]:
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
     sr_no_s = str(sr_no or "").strip()
     if not sr_no_s: return False, "sr_no is required."
@@ -2106,9 +2351,10 @@ def save_single_checklist_response(audit_id: str, dept: str, section: str, sr_no
         return False, f"Checklist row '{sr_no_s}' not found. Please reload the checklist."
     # Update only observation/evidence — all hierarchy fields (item_level, parent_order,
     # checklist text, sr_no) are preserved exactly as loaded from DB/catalog.
-    rows[idx]["observation"]  = str(observation or "").strip()
-    rows[idx]["evidence"]     = str(evidence or "").strip()
-    rows[idx]["clause_no"]    = str(clause_no or "").strip()
+    rows[idx]["observation"]        = str(observation or "").strip()
+    rows[idx]["evidence"]           = str(evidence or "").strip()
+    rows[idx]["clause_no"]          = str(clause_no or "").strip()
+    rows[idx]["full_observation"]   = str(full_observation or "").strip()
     # Normalize hierarchy fields before writing back (guards against stale None types)
     rows[idx]["item_level"]   = str(rows[idx].get("item_level","main") or "main").strip() or "main"
     rows[idx]["parent_order"] = _norm_parent(rows[idx].get("parent_order"))

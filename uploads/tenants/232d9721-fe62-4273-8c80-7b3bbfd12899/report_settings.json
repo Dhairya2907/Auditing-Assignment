@@ -1,0 +1,21 @@
+{
+  "header": {
+    "company_name": "Neujin Solutions",
+    "report_title": "ISO 13485 Audit Report",
+    "tagline": "",
+    "show_divider": true
+  },
+  "footer": {
+    "left_text": "ISO 13485 Audit Report — Confidential",
+    "center_text": "",
+    "right_text": "Page {page}"
+  },
+  "watermark": {
+    "enabled": true,
+    "text": "CONFIDENTIAL",
+    "opacity": 0.08,
+    "angle": 45,
+    "font_size": 72,
+    "color": "#cccccc"
+  }
+}

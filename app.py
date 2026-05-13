@@ -43,12 +43,11 @@ def _rerun() -> None:
     except Exception:
         st.stop()
 
-# ── CSS file loader ──────────────────────────────────────────────────────────
-import functools as _functools
 
+# ── CSS file loader ──────────────────────────────────────────────────────────
 @st.cache_resource
 def _load_css_sections() -> dict:
-    """Parse styles.css into named sections. Cached once per server lifetime."""
+    """Parse styles.css into named sections once per server lifetime."""
     import os as _os, re as _re
     css_path = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "styles.css")
     if not _os.path.exists(css_path):
@@ -65,10 +64,10 @@ def _load_css_sections() -> dict:
 
 def _inject_css(*section_names: str) -> None:
     """Inject one or more named CSS sections from styles.css."""
-    sections = _load_css_sections()
-    css_parts = [sections[n] for n in section_names if n in sections]
-    if css_parts:
-        st.markdown("<style>" + "\n".join(css_parts) + "</style>", unsafe_allow_html=True)
+    secs = _load_css_sections()
+    parts = [secs[n] for n in section_names if n in secs]
+    if parts:
+        st.markdown("<style>\n" + "\n".join(parts) + "\n</style>", unsafe_allow_html=True)
 
 # ── CSS helpers ───────────────────────────────────────────────────────────────
 def inject_enterprise_css():
@@ -80,7 +79,7 @@ def inject_enterprise_css():
         '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@700;900&family=DM+Sans:wght@300;400;500;600&display=swap">',
         unsafe_allow_html=True,
     )
-_inject_css("enterprise")
+    _inject_css("enterprise")
 
 def inject_theme_overrides():
     if (st.session_state.get("ui_theme") or "light").lower().strip() != "dark":
@@ -331,13 +330,9 @@ def ensure_checklist_seed_data():
     if changed:
         _save_json_file(path, catalog)
 
-_checklist_seed_done = False
-def _seed_checklists_once():
-    global _checklist_seed_done
-    if not _checklist_seed_done:
-        ensure_checklist_seed_data()
-        _checklist_seed_done = True
-_seed_checklists_once()
+if "checklist_seeded" not in st.session_state:
+    ensure_checklist_seed_data()
+    st.session_state["checklist_seeded"] = True
 
 # ── Engine helpers ────────────────────────────────────────────────────────────
 def _current_tenant_id() -> Optional[str]:
@@ -357,11 +352,11 @@ def _engine_call(func_name: str, *args, **kwargs):
     return fn(*args, **kwargs)
 
 # ── Cached data ───────────────────────────────────────────────────────────────
-@st.cache_data(show_spinner=False, ttl=300)
+@st.cache_data(show_spinner=False, ttl=60)
 def _cached_list_audits(tenant_id):
     return engine.list_audits(tenant_id=tenant_id) if hasattr(engine, "list_audits") else _engine_call("list_audits")
 
-@st.cache_data(show_spinner=False, ttl=300)
+@st.cache_data(show_spinner=False, ttl=60)
 def _cached_list_audit_calendar(tenant_id):
     try:
         return _engine_call("list_audit_calendar", tenant_id=tenant_id)
@@ -380,7 +375,7 @@ def _cached_skills_catalog(tenant_id):
 def _cached_people(tenant_id):
     return _engine_call("list_people_records", tenant_id=tenant_id) or []
 
-@st.cache_data(show_spinner=False, ttl=180)
+@st.cache_data(show_spinner=False, ttl=60)
 def _cached_state(tenant_id):
     return _engine_call("load_state", tenant_id=tenant_id) or {}
 
@@ -613,10 +608,11 @@ if not st.session_state.auth["logged_in"]:
             st.session_state.auth = {"logged_in": True, "tenant_code": tenant_code, "tenant_id": u.get("tenant_id"), "username": u["username"], "role": u["role"], "person_name": u.get("person_name")}
             st.rerun()
     st.stop()
+import calendar as _calendar
+import pandas as _pd
+
 # ── Audit Calendar page ───────────────────────────────────────────────────────
 def page_audit_calendar():
-    import calendar as _calendar
-    import pandas as _pd
     st.title("Audit Calendar")
     st.caption("Plan the full year in a compact calendar. Create recurring audits using year, start month, frequency, and auto-calculated occurrences.")
 
@@ -660,7 +656,7 @@ def page_audit_calendar():
     # ── CSS ─────────────────────────────────────────────────────────────────
     _inject_css("audit_calendar")
 
-    # ── Create form ───────────────────────────────────────────────────────────
+        # ── Create form ───────────────────────────────────────────────────────────
     _inject_css("audit_calendar_form")
 
     year_list = list(range(today.year - 2, today.year + 10))
@@ -1756,30 +1752,21 @@ def _is_quality_assurance_department(dept: str) -> bool:
 def _is_maintenance_department(dept: str) -> bool:
     return str(dept or "").strip().lower() == "maintenance"
 
+def _is_production_department(dept: str) -> bool:
+    return str(dept or "").strip().lower() == "production"
+
+def _node_direct_nc_if_no(node: dict) -> bool:
+    try:
+        return bool(node.get("nc_if_no"))
+    except Exception:
+        return False
+
 def _norm_parent(v):
     try:
         iv = int(float(str(v))) if v is not None else None
     except Exception:
         iv = None
     return str(iv) if iv is not None else ""
-
-def _effective_walk(all_rows, mrow, dept: str):
-    walk = _walk(all_rows, mrow)
-    if not _is_top_management_department(dept):
-        return walk
-    by_sr = {str(r.get("sr_no", "")): r for r in all_rows}
-    out = []
-    for node in walk:
-        lvl = str(node.get("item_level", "main")).strip().lower()
-        if lvl == "main":
-            out.append(node)
-            continue
-        parent_sr = str(_norm_parent(node.get("parent_order")) or "")
-        parent = by_sr.get(parent_sr)
-        parent_obs = str((parent or {}).get("observation", "") or "").strip()
-        if parent_obs == "Yes":
-            out.append(node)
-    return out
 
 def page_auditor_checklist():
     """
@@ -1958,50 +1945,7 @@ def page_auditor_checklist():
     # CHECKLIST GENERATOR SUMMARY
     # ══════════════════════════════════════════════════════════════════════════
     dep_key = str(dept or "").strip().lower()
-    if dep_key == "production":
-        pa_labels = {
-            "is_implantable": "Implantable Device",
-            "is_sterile": "Sterile Device",
-            "requires_installation": "Requires Installation",
-            "requires_servicing": "Requires Servicing",
-        }
-        pills_html = ""
-        for pa_id, pa_label in pa_labels.items():
-            val = pre_audit_answers.get(pa_id, False)
-            if val:
-                pills_html += (
-                    f'<span style="display:inline-flex;align-items:center;gap:5px;padding:4px 12px;'
-                    f'border-radius:999px;background:#ecfdf5;border:1px solid #a7f3d0;'
-                    f'color:#065f46;font-size:11px;font-weight:700;margin-right:6px;">✓ {pa_label}</span>'
-                )
-            else:
-                pills_html += (
-                    f'<span style="display:inline-flex;align-items:center;gap:5px;padding:4px 12px;'
-                    f'border-radius:999px;background:#f8fafc;border:1px solid #e2e8f0;'
-                    f'color:#94a3b8;font-size:11px;font-weight:700;margin-right:6px;">✗ {pa_label}</span>'
-                )
-
-        st.markdown(
-            f'<div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;'
-            f'padding:12px 16px;margin-bottom:16px;">'
-            f'<div style="font-size:11px;font-weight:800;color:#6366f1;letter-spacing:0.5px;'
-            f'text-transform:uppercase;margin-bottom:6px;">Product Classification</div>'
-            f'{pills_html}'
-            f'</div>',
-            unsafe_allow_html=True)
-
-        if can_edit:
-            with st.expander("🔄 Reset Pre-Audit Classification", expanded=False):
-                st.caption("This will delete all checklist answers and regenerate questions based on new classification.")
-                if st.button("Reset Classification", key=f"pa_reset_{audit_id}", type="secondary"):
-                    audit_obj = _engine_call("get_audit", audit_id)
-                    if audit_obj:
-                        audit_obj.pop("pre_audit_answers", None)
-                        audit_obj["checklists"] = {}
-                        _engine_call("save_updated_audit", audit_obj)
-                        st.cache_data.clear()
-                        st.rerun()
-    elif dep_key in {"purchase", "hr", "top management", "quality assurance"}:
+    if dep_key in {"production", "purchase", "hr", "top management", "quality assurance", "maintenance"}:
         st.markdown(
             f'<div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;'
             f'padding:12px 16px;margin-bottom:16px;">'
@@ -2037,7 +1981,7 @@ def page_auditor_checklist():
         st.session_state[sec_key] = sections[0]
 
     st.markdown("#### 📂 Section")
-    sec_cols = st.columns(min(len(sections), 5))
+    sec_cols = st.columns(min(len(sections), 6))
     for i, sec in enumerate(sections):
         is_active = st.session_state[sec_key] == sec
         if sec_cols[i % len(sec_cols)].button(
@@ -2083,23 +2027,32 @@ def page_auditor_checklist():
                 nodes.append(ss)
         return nodes
 
+    def _row_visible(all_rows, node, dept: str):
+        lvl = str(node.get("item_level", "main")).strip().lower()
+        if lvl == "main":
+            return True
+        by_sr = {str(r.get("sr_no", "")): r for r in all_rows}
+        parent_sr = str(_norm_parent(node.get("parent_order")) or "")
+        parent = by_sr.get(parent_sr)
+        parent_obs = str((parent or {}).get("observation", "") or "").strip()
+        explicit_parent_rule = str(node.get("show_if_parent_obs", "") or "").strip()
+        if explicit_parent_rule:
+            if parent_obs != explicit_parent_rule:
+                return False
+        elif _is_top_management_department(dept):
+            if parent_obs != "Yes":
+                return False
+        extra_dep = node.get("show_if_sr_obs") or {}
+        if isinstance(extra_dep, dict):
+            for dep_sr, dep_obs in extra_dep.items():
+                dep_row = by_sr.get(str(dep_sr).strip())
+                if str((dep_row or {}).get("observation", "") or "").strip() != str(dep_obs):
+                    return False
+        return True
+
     def _effective_walk(all_rows, mrow, dept: str):
         walk = _walk(all_rows, mrow)
-        if not _is_top_management_department(dept):
-            return walk
-        by_sr = {str(r.get("sr_no", "")): r for r in all_rows}
-        out = []
-        for node in walk:
-            lvl = str(node.get("item_level", "main")).strip().lower()
-            if lvl == "main":
-                out.append(node)
-                continue
-            parent_sr = str(_norm_parent(node.get("parent_order")) or "")
-            parent = by_sr.get(parent_sr)
-            parent_obs = str((parent or {}).get("observation", "") or "").strip()
-            if parent_obs == "Yes":
-                out.append(node)
-        return out
+        return [node for node in walk if _row_visible(all_rows, node, dept)]
 
     def _subtree_done(all_rows, mrow):
         return all(_done(n) for n in _effective_walk(all_rows, mrow, dept))
@@ -2333,6 +2286,17 @@ def page_auditor_checklist():
                                         height=90, disabled=not can_edit,
                                         placeholder="Enter evidence / reference")
 
+                full_obs_k = f"ck_full_obs::{audit_id}::{section}::{node_sr}"
+                if full_obs_k not in st.session_state:
+                    st.session_state[full_obs_k] = str(node.get("full_observation", "") or "")
+                full_obs = st.text_area(
+                    "Write your observation",
+                    key=full_obs_k,
+                    height=100,
+                    disabled=not can_edit,
+                    placeholder="Write your full observation here...",
+                )
+
                 _cl1, _cl2 = st.columns([1, 1])
                 _cur_main = st.session_state.get(clause_main_k, "")
                 _main_idx = _CLAUSE_MAIN_OPTIONS.index(_cur_main) if _cur_main in _CLAUSE_MAIN_OPTIONS else 0
@@ -2405,6 +2369,9 @@ def page_auditor_checklist():
                             key=ans_capa_k,
                             disabled=not can_edit,
                         )
+                elif _is_production_department(dept) and obs == "No" and _node_direct_nc_if_no(node):
+                    final_comment = "Note this as a non-conformity."
+                    st.error(final_comment)
 
                 if capa_answer == "No":
                     final_comment = "Note this as a non-conformity."
@@ -2428,8 +2395,8 @@ def page_auditor_checklist():
                 with b1:
                     if st.button(btn_lbl, key=f"ck_save_{audit_id}_{section}_{node_sr}",
                                  type="primary", disabled=not can_edit):
-                        if not str(obs or "").strip() or not str(ev or "").strip() or not str(clause_no or "").strip():
-                            st.error("Observation, Evidence and Clause No. are all required.")
+                        if not str(obs or "").strip() or not str(ev or "").strip():
+                            st.error("Observation and Evidence are required.")
                         elif (_is_purchase_department(dept) or _is_top_management_department(dept) or _is_quality_assurance_department(dept) or _is_maintenance_department(dept)) and str(obs or "") == "No" and not str(branch_answers.get("deviation_identified_capa_planned") or "").strip():
                             st.error("Please answer whether this deviation has been identified internally and any correction or CAPA planned.")
                         elif _is_purchase_cross_question(dept, node_text) and str(obs or "") == "Yes" and not str(branch_answers.get("sample_size_statistically_justified") or "").strip():
@@ -2442,6 +2409,7 @@ def page_auditor_checklist():
                                 audit_id=audit_id, dept=dept, section=section,
                                 sr_no=node_sr, observation=obs, evidence=ev,
                                 clause_no=str(clause_no or "").strip(),
+                                full_observation=str(st.session_state.get(full_obs_k, "") or "").strip(),
                                 auditor_name=person_name)
                             if ok and needs_branch_save:
                                 ok, msg = _engine_call(
@@ -2457,10 +2425,11 @@ def page_auditor_checklist():
                                 st.session_state.pop(clause_k,    None)
                                 st.session_state.pop(clause_main_k, None)
                                 st.session_state.pop(clause_sub_k,  None)
+                                st.session_state.pop(full_obs_k,  None)
                                 if needs_branch_save:
                                     st.session_state.pop(ans_capa_k, None)
                                     st.session_state.pop(ans_stat_k, None)
-                                if (_is_top_management_department(dept) or _is_quality_assurance_department(dept) or _is_maintenance_department(dept)) and str(obs or "") == "No":
+                                if (_is_top_management_department(dept) or _is_quality_assurance_department(dept)) and str(obs or "") == "No":
                                     st.session_state[main_key] = None
                                     st.session_state[step_key] = None
                                 elif is_last:
@@ -3030,6 +2999,146 @@ def page_reports():
 
             st.divider()
 
+def page_report_settings():
+    st.title("Report Settings")
+    st.caption("Customise the header, footer, and watermark that appear on every generated PDF report.")
+
+    tenant_id = _current_tenant_id()
+    cfg = _engine_call("get_report_settings", tenant_id=tenant_id) or {}
+
+    hdr = cfg.get("header", {})
+    ftr = cfg.get("footer", {})
+    wm  = cfg.get("watermark", {})
+
+    # ── inject minimal card CSS ───────────────────────────────────────────────
+    st.markdown("""
+    <style>
+    .rs-card{background:#fff;border:1px solid #e2e8f0;border-radius:14px;padding:22px 24px;margin-bottom:18px;}
+    .rs-card-title{font-size:14px;font-weight:800;color:#1e293b;letter-spacing:.3px;margin-bottom:14px;
+                   display:flex;align-items:center;gap:8px;}
+    .rs-preview{background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:16px 20px;
+                margin-top:14px;font-size:12px;color:#475569;}
+    .rs-preview-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;}
+    .rs-preview-title{font-size:15px;font-weight:800;color:#1e293b;text-align:center;flex:1;}
+    .rs-preview-company{font-size:11px;color:#6366f1;font-weight:700;text-align:center;}
+    .rs-preview-divider{border:none;border-top:1.5px solid #6366f1;margin:6px 0;}
+    .rs-preview-footer{border-top:1px solid #e2e8f0;padding-top:6px;display:flex;
+                       justify-content:space-between;font-size:10px;color:#94a3b8;margin-top:10px;}
+    .rs-wm-badge{display:inline-block;padding:6px 18px;border-radius:8px;font-size:22px;
+                 font-weight:900;letter-spacing:3px;opacity:.18;transform:rotate(-30deg);
+                 color:#64748b;border:2px solid #64748b;}
+    </style>
+    """, unsafe_allow_html=True)
+
+    # ── Header card ───────────────────────────────────────────────────────────
+    st.markdown('<div class="rs-card"><div class="rs-card-title">🏷️ Report Header</div>', unsafe_allow_html=True)
+    c1, c2 = st.columns(2)
+    company_name  = c1.text_input("Company Name",  value=hdr.get("company_name", ""),  placeholder="e.g. Acme Medical Devices Pvt. Ltd.")
+    report_title  = c2.text_input("Report Title",  value=hdr.get("report_title", "ISO 13485 Audit Report"), placeholder="e.g. ISO 13485 Audit Report")
+    tagline       = st.text_input("Tagline / Sub-title (optional)", value=hdr.get("tagline", ""), placeholder="e.g. Internal Quality Audit — Confidential")
+    show_divider  = st.toggle("Show coloured divider line below header", value=bool(hdr.get("show_divider", True)))
+
+    # live preview
+    div_html = '<hr class="rs-preview-divider">' if show_divider else ""
+    tag_html  = f'<div class="rs-preview-company">{tagline}</div>' if tagline else ""
+    st.markdown(f"""
+    <div class="rs-preview">
+      <div style="text-align:center;">
+        <div class="rs-preview-company">{company_name or "Company Name"}</div>
+        <div class="rs-preview-title">{report_title or "Report Title"}</div>
+        {tag_html}{div_html}
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # ── Footer card ───────────────────────────────────────────────────────────
+    st.markdown('<div class="rs-card"><div class="rs-card-title">📄 Report Footer</div>', unsafe_allow_html=True)
+    st.caption("Use `{page}` to insert the page number automatically.")
+    fc1, fc2, fc3 = st.columns(3)
+    footer_left   = fc1.text_input("Left text",   value=ftr.get("left_text",   "ISO 13485 Audit Report — Confidential"), key="ftr_left")
+    footer_center = fc2.text_input("Center text", value=ftr.get("center_text", ""), placeholder="optional", key="ftr_center")
+    footer_right  = fc3.text_input("Right text",  value=ftr.get("right_text",  "Page {page}"), key="ftr_right")
+
+    fl = footer_left   or ""
+    fc = footer_center or ""
+    fr = footer_right.replace("{page}", "1") if footer_right else ""
+    st.markdown(f"""
+    <div class="rs-preview">
+      <div style="height:20px;background:#f1f5f9;border-radius:4px;margin-bottom:8px;opacity:.4;"></div>
+      <div class="rs-preview-footer">
+        <span>{fl}</span><span>{fc}</span><span>{fr}</span>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # ── Watermark card ────────────────────────────────────────────────────────
+    st.markdown('<div class="rs-card"><div class="rs-card-title">💧 Watermark</div>', unsafe_allow_html=True)
+    wm_enabled  = st.toggle("Enable watermark on every page", value=bool(wm.get("enabled", False)))
+
+    wmc1, wmc2, wmc3, wmc4 = st.columns([2, 1, 1, 1])
+    wm_text    = wmc1.text_input("Watermark text",  value=wm.get("text", "CONFIDENTIAL"),   disabled=not wm_enabled)
+    wm_opacity = wmc2.slider("Opacity",  min_value=0.02, max_value=0.40, step=0.01,
+                              value=float(wm.get("opacity", 0.08)),               disabled=not wm_enabled)
+    wm_angle   = wmc3.slider("Angle °", min_value=0,    max_value=90,  step=5,
+                              value=int(wm.get("angle",   45)),                   disabled=not wm_enabled)
+    wm_size    = wmc4.slider("Font size", min_value=24, max_value=120, step=4,
+                              value=int(wm.get("font_size", 72)),                 disabled=not wm_enabled)
+
+    wm_colors = {"Light Grey": "#cccccc", "Dark Grey": "#64748b", "Blue": "#3b82f6",
+                 "Red": "#ef4444", "Green": "#22c55e", "Gold": "#f59e0b"}
+    saved_hex  = wm.get("color", "#cccccc")
+    saved_name = next((k for k, v in wm_colors.items() if v == saved_hex), "Light Grey")
+    wm_color_name = st.selectbox("Watermark colour", list(wm_colors.keys()),
+                                 index=list(wm_colors.keys()).index(saved_name),
+                                 disabled=not wm_enabled)
+    wm_color_hex  = wm_colors[wm_color_name]
+
+    if wm_enabled:
+        badge_color = wm_color_hex
+        st.markdown(f"""
+        <div class="rs-preview" style="text-align:center;min-height:60px;position:relative;overflow:hidden;">
+          <span style="display:inline-block;font-size:{min(wm_size,48)}px;font-weight:900;
+                letter-spacing:4px;opacity:{wm_opacity * 2:.2f};color:{badge_color};
+                transform:rotate(-{wm_angle}deg);">{wm_text or "WATERMARK"}</span>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown('<div class="rs-preview" style="text-align:center;color:#94a3b8;font-size:12px;">Watermark disabled</div>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
+    # ── Save button ───────────────────────────────────────────────────────────
+    st.write("")
+    if st.button("💾  Save Report Settings", type="primary", use_container_width=False):
+        new_cfg = {
+            "header": {
+                "company_name": company_name.strip(),
+                "report_title": report_title.strip(),
+                "tagline":      tagline.strip(),
+                "show_divider": show_divider,
+            },
+            "footer": {
+                "left_text":   footer_left.strip(),
+                "center_text": footer_center.strip(),
+                "right_text":  footer_right.strip(),
+            },
+            "watermark": {
+                "enabled":   wm_enabled,
+                "text":      wm_text.strip(),
+                "opacity":   round(wm_opacity, 3),
+                "angle":     wm_angle,
+                "font_size": wm_size,
+                "color":     wm_color_hex,
+            },
+        }
+        ok, msg = _engine_call("save_report_settings", new_cfg, tenant_id=tenant_id)
+        if ok:
+            st.success(f"✅ {msg}")
+        else:
+            st.error(msg)
+
+
 def page_auditor_my_audits():
     st.title("My Audits")
     render_panel("Assigned Audits", "Only audits assigned to your account are visible here.")
@@ -3100,6 +3209,7 @@ with st.sidebar:
         "Checklist":         "&#9989;",
         "Audit Details":     "&#128269;",
         "Reports":           "&#128202;",
+        "Report Settings":   "&#9881;",
         "My Audits":         "&#128203;",
     }
     if role == "admin":
@@ -3112,6 +3222,7 @@ with st.sidebar:
             "Checklist",
             "Audit Details",
             "Reports",
+            "Report Settings",
         ]
         _nav_default = 0
         if st.session_state.get("_nav_to") in _admin_pages:
@@ -3168,6 +3279,8 @@ if role == "admin":
         page_audit_details()
     elif page == "Reports":
         page_reports()
+    elif page == "Report Settings":
+        page_report_settings()
 
 else:
     if page == "Dashboard":
