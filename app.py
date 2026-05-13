@@ -43,6 +43,14 @@ def _rerun() -> None:
     except Exception:
         st.stop()
 
+_pages: dict = {}
+
+def _switch_to(page_name: str) -> None:
+    if page_name in _pages:
+        st.switch_page(_pages[page_name])
+    else:
+        st.rerun()
+
 
 # ── CSS file loader ──────────────────────────────────────────────────────────
 @st.cache_resource
@@ -860,8 +868,7 @@ def page_audit_calendar():
                         a = matched[0]
                         label = f"{a.get('title','')}  ({a.get('start_date','')} → {a.get('end_date','')})"
                         st.session_state["ap_sel_audit"] = label
-                    st.session_state["_nav_to"] = "Audit Plan"
-                    _rerun()
+                    _switch_to("Audit Plan")
 
     st.markdown(
         f'<div class="yc-outer">'
@@ -1248,14 +1255,11 @@ def page_admin_dashboard():
     # ── Quick Actions ─────────────────────────────────────────────────────────
     qa1, qa2, qa3, qa4 = st.columns([1,1,1,3])
     if qa1.button("📅 Audit Calendar",  key="db_qa_create",  use_container_width=True, type="primary"):
-        st.session_state["_nav_to"] = "Audit Calender"
-        st.rerun()
+        _switch_to("Audit Calender")
     if qa2.button("🗓 Audit Plan",       key="db_qa_plan",    use_container_width=True):
-        st.session_state["_nav_to"] = "Audit Plan"
-        st.rerun()
+        _switch_to("Audit Plan")
     if qa3.button("📊 Final Reports",   key="db_qa_pdf",     use_container_width=True):
-        st.session_state["_nav_to"] = "Reports"
-        st.rerun()
+        _switch_to("Reports")
 
     # ── KPI Cards ─────────────────────────────────────────────────────────────
     st.markdown('<div class="db-section-title">Audit Portfolio</div>', unsafe_allow_html=True)
@@ -3198,151 +3202,125 @@ def page_auditor_my_timetable():
 
 checklist_department: Optional[str] = None
 
+# ── Page wrapper functions ────────────────────────────────────────────
+def page_auditor_dashboard():
+    render_panel("Auditor Dashboard", "Your assigned audits and actions.")
+    st.metric("Assigned Audits", len(my_audits))
+    st.markdown("---")
+    _inject_css("auditor_guide")
+    st.markdown(
+        """
+        <div class="aog-card">
+          <div class="aog-head">
+            <div>
+              <div class="aog-title">Auditor Operating Guide</div>
+              <div class="aog-sub">Follow this sequence to complete an audit with accurate records and clean closure.</div>
+            </div>
+            <div class="aog-tag">Quick Guide</div>
+          </div>
+          <ol class="aog-list">
+            <li><b>Verify session:</b> Confirm the correct <b>Tenant</b>, <b>Username</b>, and <b>Role (Auditor)</b>.</li>
+            <li><b>Review assigned audit:</b> Open <b>My Audits</b> and verify department, scope, and due date.</li>
+            <li><b>Start audit:</b> Set status to <b>In Progress</b> before entering checklist data.</li>
+            <li><b>Complete checklist:</b> Record clear <b>Observations</b> and attach/reference <b>Evidence</b> for each item.</li>
+            <li><b>Validate details:</b> Review entries in <b>Audit Details</b> for completeness before submission.</li>
+            <li><b>Submit report:</b> Upload the finalized report in <b>Reports</b> and submit as per workflow.</li>
+            <li><b>Logout:</b> Sign out after completion, especially on shared systems.</li>
+          </ol>
+          <div class="aog-foot">
+            Navigation:
+            <span class="aog-pill">My Audits</span>
+            <span class="aog-pill">Checklist</span>
+            <span class="aog-pill">Audit Details</span>
+            <span class="aog-pill">Reports</span>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+def page_admin_checklist_full():
+    tid = _current_tenant_id()
+    depts = _cached_departments_catalog(tid) or []
+    depts = sorted({d for d in depts if str(d).strip()}, key=lambda x: str(x).lower())
+    add_key = "➕ Add new department"
+    options = depts + ([add_key] if add_key not in depts else [])
+    if not options:
+        st.info("No departments found.")
+        return
+    choice = st.selectbox("Department", options=options, key="chk_dept_select")
+    if choice == add_key:
+        new_dept = st.text_input("New Department Name", key="chk_new_dept_name").strip()
+        if st.button("Add Department", type="primary", key="chk_add_dept_btn"):
+            if not new_dept:
+                st.error("Please enter a department name.")
+            else:
+                _engine_call("add_department_to_catalog", new_dept, tenant_id=tid)
+                st.success(f"Added department: {new_dept}")
+                _clear_caches_and_rerun()
+        return
+    globals()["checklist_department"] = choice
+    page_admin_checklist()
+
+def page_auditor_checklist_full():
+    my_depts = sorted(
+        {(a.get("audited_department") or "").strip() for a in my_audits if (a.get("audited_department") or "").strip()},
+        key=lambda x: x.lower(),
+    )
+    if not my_depts:
+        st.info("No departments available.")
+        return
+    globals()["checklist_department"] = st.selectbox("Department", options=my_depts)
+    page_auditor_checklist()
+
+# ── Page registry & navigation ────────────────────────────────────────────
+_page_icons = {
+    "Dashboard":         "&#9783;",
+    "Audit Calender":    "&#128197;",
+    "Audit Plan":        "&#128196;",
+    "Auditors & Skills": "&#128100;",
+    "Checklist":         "&#9989;",
+    "Audit Details":     "&#128269;",
+    "Reports":           "&#128202;",
+    "Report Settings":   "&#9881;",
+    "My Audits":         "&#128203;",
+}
+
 role = (st.session_state.get("auth") or {}).get("role", "auditor")
 
-with st.sidebar:
-    _page_icons = {
-        "Dashboard":         "&#9783;",
-        "Audit Calender":    "&#128197;",
-        "Audit Plan":        "&#128196;",
-        "Auditors & Skills": "&#128100;",
-        "Checklist":         "&#9989;",
-        "Audit Details":     "&#128269;",
-        "Reports":           "&#128202;",
-        "Report Settings":   "&#9881;",
-        "My Audits":         "&#128203;",
-    }
-    if role == "admin":
-        st.markdown('<div class="sb-nav-label">Main Menu</div>', unsafe_allow_html=True)
-        _admin_pages = [
-            "Dashboard",
-            "Audit Calender",
-            "Audit Plan",
-            "Auditors & Skills",
-            "Checklist",
-            "Audit Details",
-            "Reports",
-            "Report Settings",
-        ]
-        _nav_default = 0
-        if st.session_state.get("_nav_to") in _admin_pages:
-            _nav_default = _admin_pages.index(st.session_state.pop("_nav_to"))
-        _admin_labels = [f'{_page_icons.get(p,"")}   {p}' for p in _admin_pages]
-        _sel = st.radio("", _admin_labels, index=_nav_default, label_visibility="collapsed")
-        page = _admin_pages[_admin_labels.index(_sel)]
-    else:
-        st.markdown('<div class="sb-nav-label">Main Menu</div>', unsafe_allow_html=True)
-        _aud_pages = ["Dashboard","My Audits","Checklist","Audit Details","Reports"]
-        _aud_labels = [f'{_page_icons.get(p,"")}   {p}' for p in _aud_pages]
-        _sel = st.radio("", _aud_labels, label_visibility="collapsed")
-        page = _aud_pages[_aud_labels.index(_sel)]
-
-render_breadcrumb(role, page)
-
 if role == "admin":
-    if page == "Dashboard":
-        page_admin_dashboard()
-    elif page == "Audit Calender":
-        page_audit_calendar()
-    elif page == "Audit Plan":
-        page_audit_plan()
-    elif page == "Auditors & Skills":
-        page_admin_auditors_skills()
-    elif page == "Checklist":
-        tenant_id = (st.session_state.get("auth") or {}).get("tenant_id")
-        depts = _cached_departments_catalog(tenant_id) or []
-        depts = [d for d in depts if str(d).strip()]
-        depts = sorted(set(depts), key=lambda x: str(x).lower())
-
-        add_key = "➕ Add new department"
-        options = depts + ([add_key] if add_key not in depts else [])
-
-        if not options:
-            st.info("No departments found.")
-        else:
-            choice = st.selectbox("Department", options=options, key="chk_dept_select")
-            if choice == add_key:
-                new_dept = st.text_input("New Department Name", key="chk_new_dept_name").strip()
-                if st.button("Add Department", type="primary", key="chk_add_dept_btn"):
-                    if not new_dept:
-                        st.error("Please enter a department name.")
-                    else:
-                        _engine_call("add_department_to_catalog", new_dept, tenant_id=tenant_id)
-                        st.success(f"Added department: {new_dept}")
-                        _clear_caches_and_rerun()
-                st.stop()
-
-            checklist_department = choice
-            globals()["checklist_department"] = checklist_department
-            page_admin_checklist()
-    elif page == "Audit Details":
-        page_audit_details()
-    elif page == "Reports":
-        page_reports()
-    elif page == "Report Settings":
-        page_report_settings()
-
+    _page_list = [
+        st.Page(page_admin_dashboard,        title="Dashboard",         url_path="dashboard"),
+        st.Page(page_audit_calendar,         title="Audit Calender",    url_path="audit-calender"),
+        st.Page(page_audit_plan,             title="Audit Plan",        url_path="audit-plan"),
+        st.Page(page_admin_auditors_skills,  title="Auditors & Skills", url_path="auditors-skills"),
+        st.Page(page_admin_checklist_full,   title="Checklist",         url_path="checklist"),
+        st.Page(page_audit_details,          title="Audit Details",     url_path="audit-details"),
+        st.Page(page_reports,                title="Reports",           url_path="reports"),
+        st.Page(page_report_settings,        title="Report Settings",   url_path="report-settings"),
+    ]
 else:
-    if page == "Dashboard":
-        render_panel("Auditor Dashboard", "Your assigned audits and actions.")
-        st.metric("Assigned Audits", len(my_audits))
+    _page_list = [
+        st.Page(page_auditor_dashboard,      title="Dashboard",     url_path="dashboard"),
+        st.Page(page_auditor_my_audits,      title="My Audits",     url_path="my-audits"),
+        st.Page(page_auditor_checklist_full, title="Checklist",     url_path="checklist"),
+        st.Page(page_audit_details,          title="Audit Details", url_path="audit-details"),
+        st.Page(page_reports,                title="Reports",       url_path="reports"),
+    ]
 
-        st.markdown("---")
+_pages.update({p.title: p for p in _page_list})
+pg = st.navigation(_page_list, position="hidden")
 
-        _inject_css("auditor_guide")
+with st.sidebar:
+    st.markdown('<div class="sb-nav-label">Main Menu</div>', unsafe_allow_html=True)
+    _pnames = [p.title for p in _page_list]
+    _current_name = pg.title if pg.title in _pnames else _pnames[0]
+    _nav_default = _pnames.index(_current_name)
+    _labels = [f'{_page_icons.get(p, "")}   {p}' for p in _pnames]
+    _sel = st.radio("", _labels, index=_nav_default, label_visibility="collapsed")
+    _selected_name = _pnames[_labels.index(_sel)]
+    if _selected_name != _current_name:
+        st.switch_page(_pages[_selected_name])
 
-        st.markdown(
-            """
-            
-            <div class="aog-card">
-              <div class="aog-head">
-                <div>
-                  <div class="aog-title">Auditor Operating Guide</div>
-                  <div class="aog-sub">Follow this sequence to complete an audit with accurate records and clean closure.</div>
-                </div>
-                <div class="aog-tag">Quick Guide</div>
-              </div>
-
-              <ol class="aog-list">
-                <li><b>Verify session:</b> Confirm the correct <b>Tenant</b>, <b>Username</b>, and <b>Role (Auditor)</b>.</li>
-                <li><b>Review assigned audit:</b> Open <b>My Audits</b> and verify department, scope, and due date.</li>
-                <li><b>Start audit:</b> Set status to <b>In Progress</b> before entering checklist data.</li>
-                <li><b>Complete checklist:</b> Record clear <b>Observations</b> and attach/reference <b>Evidence</b> for each item.</li>
-                <li><b>Validate details:</b> Review entries in <b>Audit Details</b> for completeness before submission.</li>
-                <li><b>Submit report:</b> Upload the finalized report in <b>Reports</b> and submit as per workflow.</li>
-                <li><b>Logout:</b> Sign out after completion, especially on shared systems.</li>
-              </ol>
-
-              <div class="aog-foot">
-                Navigation:
-                <span class="aog-pill">My Audits</span>
-                <span class="aog-pill">Checklist</span>
-                <span class="aog-pill">Audit Details</span>
-                <span class="aog-pill">Reports</span>
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-    elif page == "My Audits":
-        page_auditor_my_audits()
-    elif page == "Checklist":
-        my_depts = sorted(
-            {
-                (a.get("audited_department") or "").strip()
-                for a in my_audits
-                if (a.get("audited_department") or "").strip()
-
-            },
-            key=lambda x: x.lower(),
-        )
-        if not my_depts:
-            st.info("No departments available.")
-        else:
-            checklist_department = st.selectbox("Department", options=my_depts)
-            globals()["checklist_department"] = checklist_department
-            page_auditor_checklist()
-    elif page == "Audit Details":
-        page_audit_details()
-    elif page == "Reports":
-        page_reports()
+render_breadcrumb(role, _current_name)
+pg.run()
