@@ -2129,7 +2129,7 @@ def register_final_generated_report(*, created_by: str, pdf_rel_path: str, tenan
     allowed_users = _normalize_users_list(allowed_users or ["ALL_AUDITORS"])
     report_id = _uuid()
     row = {"id": report_id, "tenant_id": tenant_id, "created_by": created_by, "created_at": _now_iso(), "summary": stored_summary, "audit_ids_json": json.dumps(audit_ids_clean), "allowed_users_json": json.dumps(allowed_users), "pdf_rel_path": pdf_rel_path}
-    _execute("insert into generated_final_reports (id, tenant_id, created_by, created_at, summary, audit_ids_json, allowed_users_json, pdf_rel_path, is_deleted, deleted_at, deleted_by) values (?, ?, ?, ?, ?, ?, ?, ?, 0, null, null);", (row["id"], row["tenant_id"], row["created_by"], row["created_at"], row["summary"], row["audit_ids_json"], row["allowed_users_json"], row["pdf_rel_path"]))
+    _execute("insert into generated_final_reports (id, tenant_id, created_by, created_at, summary, audit_ids_json, allowed_users_json, pdf_rel_path, is_deleted, deleted_at, deleted_by) values (?, ?, ?, ?, ?, ?, ?, ?, ?, null, null);", (row["id"], row["tenant_id"], row["created_by"], row["created_at"], row["summary"], row["audit_ids_json"], row["allowed_users_json"], row["pdf_rel_path"], False))
     return True, row, "Final report registered."
 
 def _parse_report_row(r: Dict) -> Dict:
@@ -2152,7 +2152,7 @@ def list_final_generated_reports_for_user(username: str, role: str, tenant_id: O
 def get_final_generated_report(report_id: str, username: str, role: str, tenant_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     tenant_id = tenant_id or ensure_seed_files(DEFAULT_TENANT_CODE)
     r = _fetch_one("select id, created_by, created_at, summary, audit_ids_json, allowed_users_json, pdf_rel_path, is_deleted from generated_final_reports where tenant_id = ? and id = ? limit 1;", (tenant_id, str(report_id or "").strip()))
-    if not r or int(r.get("is_deleted") or 0) == 1: return None
+    if not r or bool(r.get("is_deleted")): return None
     role = str(role or "").strip().lower()
     username = _normalize_text(username)
     allowed_norm = {str(x).strip().lower() for x in json.loads(r.get("allowed_users_json") or "[]") if str(x).strip()}
@@ -2166,10 +2166,10 @@ def delete_final_generated_report(report_id: str, requester_role: str, tenant_id
     if not report_id: return False, "report_id is required."
     r = _fetch_one("select id, pdf_rel_path, is_deleted from generated_final_reports where tenant_id = ? and id = ? limit 1;", (tenant_id, report_id))
     if not r: return False, "Final report not found."
-    if int(r.get("is_deleted") or 0) == 1: return False, "Final report already deleted."
+    if bool(r.get("is_deleted")): return False, "Final report already deleted."
     try: abs_path = resolve_final_report_pdf_abs_path(tenant_id, str(r.get("pdf_rel_path") or ""))
     except Exception: abs_path = None
-    _execute("update generated_final_reports set is_deleted = 1, deleted_at = ?, deleted_by = ? where tenant_id = ? and id = ?;", (_now_iso(), "admin", tenant_id, report_id))
+    _execute("update generated_final_reports set is_deleted = ?, deleted_at = ?, deleted_by = ? where tenant_id = ? and id = ?;", (True, _now_iso(), "admin", tenant_id, report_id))
     if abs_path and os.path.exists(abs_path):
         try: os.remove(abs_path)
         except Exception: pass
