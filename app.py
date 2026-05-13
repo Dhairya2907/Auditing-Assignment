@@ -360,42 +360,42 @@ def _engine_call(func_name: str, *args, **kwargs):
     return fn(*args, **kwargs)
 
 # ── Cached data ───────────────────────────────────────────────────────────────
-@st.cache_data(show_spinner=False, ttl=60)
+@st.cache_data(show_spinner=False, ttl=300)
 def _cached_list_audits(tenant_id):
     return engine.list_audits(tenant_id=tenant_id) if hasattr(engine, "list_audits") else _engine_call("list_audits")
 
-@st.cache_data(show_spinner=False, ttl=60)
+@st.cache_data(show_spinner=False, ttl=300)
 def _cached_list_audit_calendar(tenant_id):
     try:
         return _engine_call("list_audit_calendar", tenant_id=tenant_id)
     except TypeError:
         return _engine_call("list_audit_calendar")
 
-@st.cache_data(show_spinner=False, ttl=300)
+@st.cache_data(show_spinner=False, ttl=600)
 def _cached_departments_catalog(tenant_id):
     return _engine_call("load_departments_catalog", tenant_id=tenant_id) or []
 
-@st.cache_data(show_spinner=False, ttl=300)
+@st.cache_data(show_spinner=False, ttl=600)
 def _cached_skills_catalog(tenant_id):
     return _engine_call("load_skills_catalog", tenant_id=tenant_id) or {}
 
-@st.cache_data(show_spinner=False, ttl=120)
+@st.cache_data(show_spinner=False, ttl=300)
 def _cached_people(tenant_id):
     return _engine_call("list_people_records", tenant_id=tenant_id) or []
 
-@st.cache_data(show_spinner=False, ttl=60)
+@st.cache_data(show_spinner=False, ttl=300)
 def _cached_state(tenant_id):
     return _engine_call("load_state", tenant_id=tenant_id) or {}
 
-@st.cache_data(show_spinner=False, ttl=300)
+@st.cache_data(show_spinner=False, ttl=600)
 def _cached_sections_for_dept(tenant_id, dept: str):
     return _engine_call("get_sections_for_department", dept, tenant_id=tenant_id) or []
 
-@st.cache_data(show_spinner=False, ttl=300)
+@st.cache_data(show_spinner=False, ttl=600)
 def _cached_items_for_section(tenant_id, dept: str, section: str):
     return _engine_call("get_items_for_department_section", dept, section, tenant_id=tenant_id) or []
 
-@st.cache_data(show_spinner=False, ttl=300)
+@st.cache_data(show_spinner=False, ttl=600)
 def _cached_timetable_schedule():
     return (timetable.load_schedule() if _HAS_TIMETABLE and timetable else {}) or {"days": {}}
 
@@ -1174,6 +1174,14 @@ if role == "auditor" and person_name and _HAS_TIMETABLE:
 tenant_id = st.session_state.auth.get("tenant_id")
 all_audits = _cached_list_audits(tenant_id)
 my_audits = [a for a in all_audits if a.get("assigned_auditor") == person_name] if role == "auditor" else []
+
+# Prefetch all page data now so every page loads from warm cache
+_cached_list_audit_calendar(tenant_id)
+_cached_departments_catalog(tenant_id)
+_cached_skills_catalog(tenant_id)
+_cached_people(tenant_id)
+_cached_state(tenant_id)
+_cached_timetable_schedule()
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -2465,7 +2473,9 @@ def page_audit_details():
     selected_label = st.selectbox("Select Audit ID", options=labels, key="audit_details_select")
     selected_id = label_to_id[selected_label]
 
-    audit = _engine_call("get_audit", selected_id) if selected_id else None
+    audit = next((a for a in all_audits if a.get("audit_id") == selected_id), None) or (
+        _engine_call("get_audit", selected_id) if selected_id else None
+    )
     if not audit:
         st.warning("Select an audit.")
         st.stop()
@@ -2646,7 +2656,7 @@ def page_reports():
             index=0,
         )
 
-        all_audits = engine.list_audits(tenant_id=tenant_id)
+        all_audits = _cached_list_audits(tenant_id)
         eligible_audits = [
             a for a in all_audits if a.get("status") == status_filter
         ]
